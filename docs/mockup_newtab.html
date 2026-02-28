@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GitGUI - 新しいタブ（プロジェクト追加）</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', 'Meiryo', sans-serif;
+    background: #1e1e1e;
+    color: #cccccc;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ===== タブバー ===== */
+  .tab-bar {
+    display: flex;
+    align-items: center;
+    background: #252526;
+    border-bottom: 1px solid #3c3c3c;
+    height: 38px;
+    min-height: 38px;
+    padding: 0 4px;
+    gap: 2px;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    background: #2d2d2d;
+    border: 1px solid #3c3c3c;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 13px;
+    color: #969696;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .tab:hover { background: #363636; color: #cccccc; }
+  .tab.active {
+    background: #1e1e1e;
+    color: #ffffff;
+    border-bottom: 2px solid #007acc;
+  }
+  .tab .branch-badge {
+    font-size: 11px;
+    background: #007acc33;
+    color: #4fc1ff;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .tab .close-btn {
+    font-size: 14px;
+    color: #969696;
+    cursor: pointer;
+    line-height: 1;
+    border-radius: 3px;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tab .close-btn:hover { background: #ff5555; color: #fff; }
+  .tab-add {
+    width: 30px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px dashed #555;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 18px;
+    color: #888;
+    transition: all 0.15s;
+  }
+  .tab-add:hover { background: #333; color: #fff; border-color: #007acc; }
+
+  /* ===== 新規タブ メインコンテンツ ===== */
+  .newtab-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 48px;
+    padding: 40px;
+  }
+
+  /* ヘッダー */
+  .newtab-header {
+    text-align: center;
+  }
+  .newtab-header .app-icon {
+    font-size: 56px;
+    margin-bottom: 16px;
+    display: block;
+  }
+  .newtab-header h1 {
+    font-size: 28px;
+    font-weight: 300;
+    color: #fff;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+  }
+  .newtab-header p {
+    font-size: 14px;
+    color: #888;
+  }
+
+  /* アクションカード */
+  .action-cards {
+    display: flex;
+    gap: 32px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .action-card {
+    width: 320px;
+    background: #252526;
+    border: 1px solid #3c3c3c;
+    border-radius: 12px;
+    padding: 36px 32px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .action-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 12px 12px 0 0;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .action-card:hover {
+    border-color: #555;
+    background: #2a2a2a;
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px #00000066;
+  }
+  .action-card:hover::before { opacity: 1; }
+  .action-card:active {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px #00000044;
+  }
+
+  /* Clone カード */
+  .action-card.clone-card::before { background: #007acc; }
+  .action-card.clone-card:hover { border-color: #007acc55; }
+  .action-card.clone-card .card-icon { color: #4fc1ff; }
+  .action-card.clone-card .card-badge { background: #007acc33; color: #4fc1ff; }
+
+  /* フォルダ追加カード */
+  .action-card.folder-card::before { background: #4ec9b0; }
+  .action-card.folder-card:hover { border-color: #4ec9b055; }
+  .action-card.folder-card .card-icon { color: #4ec9b0; }
+  .action-card.folder-card .card-badge { background: #4ec9b033; color: #4ec9b0; }
+
+  .action-card .card-icon {
+    font-size: 48px;
+    display: block;
+    margin-bottom: 20px;
+  }
+  .action-card h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 10px;
+  }
+  .action-card .card-desc {
+    font-size: 13px;
+    color: #888;
+    line-height: 1.6;
+    margin-bottom: 16px;
+  }
+  .action-card .card-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  /* D&D ヒント */
+  .dnd-hint {
+    text-align: center;
+    color: #555;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dnd-hint .hint-sep {
+    width: 60px;
+    height: 1px;
+    background: #3c3c3c;
+  }
+  .dnd-hint .hint-icon { font-size: 16px; }
+
+  /* 最近使ったプロジェクト */
+  .recent-section {
+    width: 100%;
+    max-width: 672px;
+  }
+  .recent-header {
+    font-size: 12px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+  .recent-list {
+    background: #252526;
+    border: 1px solid #3c3c3c;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .recent-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: background 0.1s;
+    border-bottom: 1px solid #2a2a2a;
+    font-size: 13px;
+  }
+  .recent-item:last-child { border-bottom: none; }
+  .recent-item:hover { background: #2a2d2e; }
+  .recent-item .recent-icon { font-size: 18px; color: #888; }
+  .recent-item .recent-name { color: #ccc; font-weight: 500; }
+  .recent-item .recent-path { color: #666; font-size: 12px; margin-left: auto; }
+  .recent-item .recent-branch {
+    font-size: 11px;
+    background: #007acc33;
+    color: #4fc1ff;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+
+  /* ===== D&D オーバーレイ ===== */
+  .drop-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #007acc44;
+    z-index: 300;
+    align-items: center;
+    justify-content: center;
+    border: 3px dashed #007acc;
+  }
+  .drop-overlay.show { display: flex; }
+  .drop-overlay .drop-message {
+    background: #2d2d2d;
+    border: 2px solid #007acc;
+    border-radius: 12px;
+    padding: 40px 60px;
+    text-align: center;
+  }
+  .drop-overlay .drop-message .drop-icon { font-size: 48px; margin-bottom: 12px; }
+  .drop-overlay .drop-message .drop-text { font-size: 18px; color: #fff; }
+  .drop-overlay .drop-message .drop-sub { font-size: 13px; color: #888; margin-top: 6px; }
+
+  /* ===== Clone モーダル ===== */
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #00000088;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    background: #2d2d2d;
+    border: 1px solid #555;
+    border-radius: 8px;
+    padding: 24px;
+    width: 520px;
+    box-shadow: 0 8px 32px #00000088;
+  }
+  .modal h3 {
+    font-size: 16px;
+    color: #fff;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .modal-field {
+    margin-bottom: 14px;
+  }
+  .modal-field label {
+    display: block;
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 4px;
+  }
+  .modal-field input {
+    width: 100%;
+    padding: 8px 10px;
+    background: #1e1e1e;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 13px;
+  }
+  .modal-field input:focus { outline: none; border-color: #007acc; }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+  }
+  .modal-actions button {
+    padding: 6px 18px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .modal-actions .btn-cancel { background: #363636; color: #ccc; }
+  .modal-actions .btn-ok { background: #007acc; border-color: #007acc; color: #fff; }
+  .modal-actions .btn-ok:hover { background: #1a8ad4; }
+
+  /* プログレスバー */
+  .clone-progress {
+    display: none;
+    margin-top: 16px;
+  }
+  .clone-progress.show { display: block; }
+  .progress-bar-bg {
+    width: 100%;
+    height: 6px;
+    background: #1e1e1e;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    width: 65%;
+    height: 100%;
+    background: linear-gradient(90deg, #007acc, #4fc1ff);
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .progress-text {
+    font-size: 11px;
+    color: #888;
+    margin-top: 6px;
+    text-align: center;
+  }
+
+  /* ===== ステータスバー ===== */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    background: #007acc;
+    color: #fff;
+    font-size: 12px;
+    padding: 2px 12px;
+    height: 24px;
+    min-height: 24px;
+    gap: 16px;
+  }
+  .status-right { margin-left: auto; display: flex; gap: 16px; }
+
+  /* ===== ラベル ===== */
+  .mockup-label {
+    position: fixed;
+    top: 8px;
+    right: 12px;
+    background: #f44747;
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 4px;
+    z-index: 999;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+
+  /* スクロールバー */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: #1e1e1e; }
+  ::-webkit-scrollbar-thumb { background: #424242; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #555; }
+</style>
+</head>
+<body>
+
+<div class="mockup-label">MOCKUP — 新しいタブ</div>
+
+<!-- タブバー -->
+<div class="tab-bar">
+  <div class="tab" draggable="true">
+    <span>📁 my-webapp</span>
+    <span class="branch-badge">main</span>
+    <span class="close-btn">×</span>
+  </div>
+  <div class="tab" draggable="true">
+    <span>📁 api-server</span>
+    <span class="branch-badge">develop</span>
+    <span class="close-btn">×</span>
+  </div>
+  <div class="tab active">
+    <span>＋ 新しいタブ</span>
+    <span class="close-btn">×</span>
+  </div>
+  <div class="tab-add" title="プロジェクトを追加">+</div>
+</div>
+
+<!-- 新しいタブ コンテンツ -->
+<div class="newtab-content">
+
+  <!-- ヘッダー -->
+  <div class="newtab-header">
+    <span class="app-icon">🔀</span>
+    <h1>GitGUI</h1>
+    <p>リポジトリを追加して Git 管理を始めましょう</p>
+  </div>
+
+  <!-- アクションカード -->
+  <div class="action-cards">
+    <!-- Clone カード -->
+    <div class="action-card clone-card" onclick="toggleModal('clone-modal')">
+      <span class="card-icon">📥</span>
+      <h2>リポジトリをクローン</h2>
+      <p class="card-desc">
+        GitHub / GitLab / Bitbucket などの<br>
+        リモートリポジトリを URL でクローンします
+      </p>
+      <span class="card-badge">CLONE FROM URL</span>
+    </div>
+
+    <!-- 既存フォルダ追加カード -->
+    <div class="action-card folder-card" onclick="alert('フォルダ選択ダイアログを表示（モックアップ）')">
+      <span class="card-icon">📂</span>
+      <h2>既存のフォルダを追加</h2>
+      <p class="card-desc">
+        すでにクローン済みのリポジトリや<br>
+        ローカルの Git プロジェクトを追加します
+      </p>
+      <span class="card-badge">OPEN LOCAL FOLDER</span>
+    </div>
+  </div>
+
+  <!-- D&D ヒント -->
+  <div class="dnd-hint">
+    <span class="hint-sep"></span>
+    <span class="hint-icon">📂</span>
+    <span>フォルダをウィンドウにドラッグ&ドロップしても追加できます</span>
+    <span class="hint-sep"></span>
+  </div>
+
+  <!-- 最近使ったプロジェクト -->
+  <div class="recent-section">
+    <div class="recent-header">最近閉じたプロジェクト</div>
+    <div class="recent-list">
+      <div class="recent-item">
+        <span class="recent-icon">📁</span>
+        <span class="recent-name">blog-platform</span>
+        <span class="recent-branch">main</span>
+        <span class="recent-path">F:\projects\blog-platform</span>
+      </div>
+      <div class="recent-item">
+        <span class="recent-icon">📁</span>
+        <span class="recent-name">design-system</span>
+        <span class="recent-branch">develop</span>
+        <span class="recent-path">F:\projects\design-system</span>
+      </div>
+      <div class="recent-item">
+        <span class="recent-icon">📁</span>
+        <span class="recent-name">mobile-app</span>
+        <span class="recent-branch">feature/v3</span>
+        <span class="recent-path">F:\projects\mobile-app</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ステータスバー -->
+<div class="status-bar">
+  <span>プロジェクトを追加してください</span>
+  <span class="status-right">
+    <span>GitGUI v0.1.0</span>
+  </span>
+</div>
+
+<!-- Clone モーダル -->
+<div class="modal-overlay" id="clone-modal" style="display:none">
+  <div class="modal">
+    <h3><span style="font-size:20px">📥</span> リポジトリをクローン</h3>
+    <div class="modal-field">
+      <label>リポジトリ URL</label>
+      <input type="text" placeholder="https://github.com/user/repo.git" value="https://github.com/example/project.git">
+    </div>
+    <div class="modal-field">
+      <label>保存先フォルダ</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" placeholder="F:\projects\..." value="F:\projects\project" style="flex:1">
+        <button style="padding:6px 12px;background:#363636;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer">参照...</button>
+      </div>
+    </div>
+    <div class="clone-progress" id="clone-progress">
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill"></div>
+      </div>
+      <div class="progress-text">Cloning... 65% (receiving objects)</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="toggleModal('clone-modal')">キャンセル</button>
+      <button class="btn-ok" onclick="showProgress()">クローン開始</button>
+    </div>
+  </div>
+</div>
+
+<!-- D&D ドロップオーバーレイ -->
+<div class="drop-overlay" id="drop-overlay">
+  <div class="drop-message">
+    <div class="drop-icon">📂</div>
+    <div class="drop-text">フォルダをドロップしてリポジトリを追加</div>
+    <div class="drop-sub">Git リポジトリのフォルダをここにドロップしてください</div>
+  </div>
+</div>
+
+<script>
+  function toggleModal(id) {
+    const el = document.getElementById(id);
+    el.style.display = el.style.display === 'none' ? 'flex' : 'none';
+  }
+
+  function showProgress() {
+    document.getElementById('clone-progress').classList.add('show');
+  }
+
+  // ===== D&D ドロップオーバーレイ =====
+  let dragCounter = 0;
+  document.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    document.getElementById('drop-overlay').classList.add('show');
+  });
+  document.addEventListener('dragleave', () => {
+    dragCounter--;
+    if (dragCounter === 0) {
+      document.getElementById('drop-overlay').classList.remove('show');
+    }
+  });
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    document.getElementById('drop-overlay').classList.remove('show');
+  });
+</script>
+
+</body>
+</html>

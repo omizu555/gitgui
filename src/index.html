@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitGUI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ===== タブバー ===== -->
+<div class="tab-bar" id="tab-bar">
+  <!-- タブはJSで動的に生成 -->
+  <div class="tab-add" id="btn-add-tab" title="プロジェクトを追加（D&Dも可）">+</div>
+</div>
+
+<!-- ===== ツールバー (プロジェクトタブ用) ===== -->
+<div class="toolbar" id="toolbar">
+  <div class="toolbar-group">
+    <button class="toolbar-btn" id="btn-fetch" disabled>
+      <span class="icon">🔄</span> Fetch
+    </button>
+    <button class="toolbar-btn success" id="btn-pull" disabled>
+      <span class="icon">⬇️</span> Pull
+    </button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn warning" id="btn-push" disabled>
+      <span class="icon">⬆️</span> Push
+    </button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn info" id="btn-stash" disabled>
+      <span class="icon">📦</span> Stash <span style="font-size:10px">▼</span>
+    </button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn" id="btn-explorer" disabled title="エクスプローラーで開く">
+      <span class="icon">📂</span> Explorer
+    </button>
+    <button class="toolbar-btn" id="btn-terminal" disabled title="ターミナルで開く">
+      <span class="icon">💻</span> Terminal
+    </button>
+    <button class="toolbar-btn" id="btn-remote-url" disabled title="リモートをブラウザで開く">
+      <span class="icon">🌐</span> Remote
+    </button>
+    <button class="toolbar-btn" id="btn-settings" title="設定">
+      <span class="icon">⚙️</span>
+    </button>
+  </div>
+  <div class="toolbar-right">
+    <div class="branch-selector" id="branch-selector" style="display:none">
+      <span>🔀</span>
+      <span id="current-branch-name">main</span>
+      <span style="font-size:10px">▼</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ブランチドロップダウン ===== -->
+<div class="branch-dropdown" id="branch-dropdown">
+  <div class="dd-header">ローカルブランチ</div>
+  <div id="local-branches"></div>
+  <div class="dd-header">リモートブランチ</div>
+  <div id="remote-branches"></div>
+  <div class="dd-new" id="btn-new-branch">＋ 新しいブランチを作成</div>
+</div>
+
+<!-- ===== Stash ドロップダウン ===== -->
+<div class="stash-dropdown" id="stash-dropdown">
+  <div class="sd-header">
+    <span>Stash 一覧</span>
+    <button class="btn-stash-new" id="btn-stash-new" title="現在の変更をStash">+ New Stash</button>
+  </div>
+  <div id="stash-list"></div>
+</div>
+
+<!-- ===== メイン: プロジェクトビュー ===== -->
+<div class="main-content" id="project-view" style="display:none">
+  <!-- 左パネル -->
+  <div class="left-panel">
+    <div class="commit-area">
+      <textarea class="commit-input" id="commit-message" placeholder="コミットメッセージを入力..."></textarea>
+      <div class="commit-actions">
+        <div class="btn-sm" id="btn-stage-all">Stage All</div>
+        <div class="btn-sm primary" id="btn-commit">✓ Commit</div>
+      </div>
+      <div class="amend-row">
+        <input type="checkbox" id="amend-check">
+        <label for="amend-check">Amend（直前のコミットを修正）</label>
+      </div>
+    </div>
+
+    <div class="panel-header">
+      変更ファイル
+      <span class="count" id="file-count">0</span>
+    </div>
+
+    <div class="selection-hint">
+      <span class="hint-key">Ctrl</span>+Click で複数選択　
+      <span class="hint-key">Shift</span>+Click で範囲選択
+    </div>
+
+    <div class="file-list" id="file-list">
+      <!-- JSで動的に生成 -->
+    </div>
+  </div>
+
+  <!-- 右パネル -->
+  <div class="right-panel">
+    <div class="panel-header">
+      コミットログ
+      <span class="count" id="log-count">0</span>
+    </div>
+    <div class="log-search">
+      <span>🔍</span>
+      <input type="text" id="log-search-input" placeholder="コミットメッセージまたは作者名で検索...">
+      <button id="log-search-mode" class="search-mode-btn" title="検索モード切替: メッセージ">💬</button>
+    </div>
+    <div class="log-header">
+      <span>Graph</span>
+      <span>Hash</span>
+      <span>メッセージ</span>
+      <span>作者</span>
+      <span style="text-align:right">日付</span>
+    </div>
+    <div class="log-table" id="log-table">
+      <!-- JSで動的に生成 -->
+    </div>
+  </div>
+</div>
+
+<!-- ===== メイン: 新しいタブページ ===== -->
+<div class="newtab-content" id="newtab-view">
+  <div class="newtab-header">
+    <span class="app-icon">🔀</span>
+    <h1>GitGUI</h1>
+    <p>リポジトリを追加して Git 管理を始めましょう</p>
+  </div>
+  <div class="action-cards">
+    <div class="action-card clone-card" id="btn-clone-card">
+      <span class="card-icon">📥</span>
+      <h2>リポジトリをクローン</h2>
+      <p class="card-desc">GitHub / GitLab 等のリモートリポジトリを<br>URL でクローンします</p>
+      <span class="card-badge">CLONE FROM URL</span>
+    </div>
+    <div class="action-card folder-card" id="btn-folder-card">
+      <span class="card-icon">📂</span>
+      <h2>既存のフォルダを追加</h2>
+      <p class="card-desc">すでにクローン済みのリポジトリや<br>ローカルの Git プロジェクトを追加します</p>
+      <span class="card-badge">OPEN LOCAL FOLDER</span>
+    </div>
+  </div>
+  <div class="dnd-hint">
+    <span class="hint-sep"></span>
+    <span>📂 フォルダをウィンドウにD&Dしても追加できます</span>
+    <span class="hint-sep"></span>
+  </div>
+  <div class="recent-section" id="recent-section" style="display:none">
+    <div class="recent-header">最近閉じたプロジェクト</div>
+    <div class="recent-list" id="recent-list"></div>
+  </div>
+</div>
+
+<!-- ===== Clone モーダル ===== -->
+<div class="modal-overlay" id="clone-modal">
+  <div class="modal" style="width:520px">
+    <h3><span style="font-size:20px">📥</span> リポジトリをクローン</h3>
+    <div class="modal-field">
+      <label>リポジトリ URL</label>
+      <input type="text" id="clone-url" placeholder="https://github.com/user/repo.git">
+    </div>
+    <div class="modal-field">
+      <label>保存先フォルダ</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="clone-dest" placeholder="フォルダを選択..." style="flex:1" readonly>
+        <button id="btn-clone-browse" style="padding:6px 12px;background:#363636;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer">参照...</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="btn-clone-cancel">キャンセル</button>
+      <button class="btn-ok" id="btn-clone-ok">クローン開始</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 新規ブランチモーダル ===== -->
+<div class="modal-overlay" id="new-branch-modal">
+  <div class="modal">
+    <h3>🔀 新しいブランチを作成</h3>
+    <div class="modal-field">
+      <label>ブランチ名</label>
+      <input type="text" id="new-branch-name" placeholder="feature/my-feature">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="btn-branch-cancel">キャンセル</button>
+      <button class="btn-ok" id="btn-branch-ok">作成して切り替え</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Diff モーダル ===== -->
+<div class="modal-overlay" id="diff-modal">
+  <div class="diff-modal">
+    <div class="diff-header">
+      <h3 id="diff-filename">📄 filename</h3>
+      <span class="diff-close" id="btn-diff-close">×</span>
+    </div>
+    <div class="diff-body" id="diff-body"></div>
+  </div>
+</div>
+
+<!-- ===== コンテキストメニュー ===== -->
+<div class="context-menu" id="context-menu">
+  <div class="cm-header">選択中: <span id="cm-count">0</span> ファイル</div>
+  <div class="cm-item" data-action="stage">
+    <span class="cm-icon">📥</span> Stage <span class="cm-shortcut">Enter</span>
+  </div>
+  <div class="cm-item" data-action="unstage">
+    <span class="cm-icon">📤</span> Unstage
+  </div>
+  <div class="cm-sep"></div>
+  <div class="cm-item" data-action="diff">
+    <span class="cm-icon">📄</span> Diff を表示 <span class="cm-shortcut">D</span>
+  </div>
+  <div class="cm-item" data-action="open-file">
+    <span class="cm-icon">🔗</span> ファイルを開く
+  </div>
+  <div class="cm-item" data-action="copy-path">
+    <span class="cm-icon">📋</span> パスをコピー <span class="cm-shortcut">Ctrl+C</span>
+  </div>
+  <div class="cm-sep"></div>
+  <div class="cm-item danger" data-action="discard">
+    <span class="cm-icon">🗑️</span> Discard Changes
+  </div>
+</div>
+
+<!-- ===== コミット詳細モーダル ===== -->
+<div class="modal-overlay" id="commit-detail-modal">
+  <div class="commit-detail-modal">
+    <div class="cd-header">
+      <h3 id="cd-title">📋 コミット詳細</h3>
+      <span class="cd-close" id="btn-cd-close">×</span>
+    </div>
+    <div class="cd-body">
+      <div class="cd-meta">
+        <div class="cd-row"><span class="cd-label">Hash</span><span class="cd-value mono" id="cd-hash"></span></div>
+        <div class="cd-row"><span class="cd-label">作者</span><span class="cd-value" id="cd-author"></span></div>
+        <div class="cd-row"><span class="cd-label">日時</span><span class="cd-value" id="cd-date"></span></div>
+        <div class="cd-row"><span class="cd-label">親コミット</span><span class="cd-value mono" id="cd-parents"></span></div>
+      </div>
+      <div class="cd-message" id="cd-message"></div>
+      <div class="cd-files-header">変更ファイル <span class="count" id="cd-file-count">0</span></div>
+      <div class="cd-files" id="cd-files"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 設定モーダル ===== -->
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal settings-modal">
+    <h3><span style="font-size:20px">⚙️</span> 設定</h3>
+    <div class="settings-section">
+      <div class="settings-row">
+        <label class="settings-label" for="setting-auto-fetch">自動フェッチ</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="setting-auto-fetch">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="settings-desc">有効にすると、定期的にリモートの変更を確認します</div>
+      <div class="settings-row" id="auto-fetch-interval-row">
+        <label class="settings-label" for="setting-fetch-interval">フェッチ間隔（分）</label>
+        <select id="setting-fetch-interval" class="settings-select">
+          <option value="5">5分</option>
+          <option value="10" selected>10分</option>
+          <option value="15">15分</option>
+          <option value="30">30分</option>
+          <option value="60">60分</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="btn-settings-cancel">キャンセル</button>
+      <button class="btn-ok" id="btn-settings-ok">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ローディングオーバーレイ ===== -->
+<div class="loading-overlay" id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">処理中...</div>
+</div>
+
+<!-- ===== D&D ドロップオーバーレイ ===== -->
+<div class="drop-overlay" id="drop-overlay">
+  <div class="drop-message">
+    <div class="drop-icon">📂</div>
+    <div class="drop-text">フォルダをドロップしてリポジトリを追加</div>
+    <div class="drop-sub">Git リポジトリのフォルダをここにドロップしてください</div>
+  </div>
+</div>
+
+<!-- ===== トースト通知コンテナ ===== -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ===== ステータスバー ===== -->
+<div class="status-bar" id="status-bar">
+  <span class="status-item" id="status-branch">プロジェクトを追加してください</span>
+  <span class="status-right">
+    <span class="status-item">GitGUI v0.1.0</span>
+  </span>
+</div>
+
+<script type="module" src="./main.ts"></script>
+</body>
+</html>

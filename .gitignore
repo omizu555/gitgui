@@ -1,0 +1,28 @@
+# Rust / Cargo
+src-tauri/target/
+
+# Node
+node_modules/
+
+# Tauri build output
+src-tauri/gen/
+
+# Vite build output
+dist/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# App data (debug)
+*.log
+
+# Package lock (npm)
+package-lock.json

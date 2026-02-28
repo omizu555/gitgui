@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GitGUI - UIモックアップ</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', 'Meiryo', sans-serif;
+    background: #1e1e1e;
+    color: #cccccc;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ===== タブバー ===== */
+  .tab-bar {
+    display: flex;
+    align-items: center;
+    background: #252526;
+    border-bottom: 1px solid #3c3c3c;
+    height: 38px;
+    min-height: 38px;
+    padding: 0 4px;
+    gap: 2px;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    background: #2d2d2d;
+    border: 1px solid #3c3c3c;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 13px;
+    color: #969696;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .tab:hover { background: #363636; color: #cccccc; }
+  .tab.active {
+    background: #1e1e1e;
+    color: #ffffff;
+    border-bottom: 2px solid #007acc;
+  }
+  .tab .branch-badge {
+    font-size: 11px;
+    background: #007acc33;
+    color: #4fc1ff;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .tab .close-btn {
+    font-size: 14px;
+    color: #969696;
+    cursor: pointer;
+    line-height: 1;
+    border-radius: 3px;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tab .close-btn:hover { background: #ff5555; color: #fff; }
+  .tab-add {
+    width: 30px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px dashed #555;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 18px;
+    color: #888;
+    transition: all 0.15s;
+  }
+  .tab-add:hover { background: #333; color: #fff; border-color: #007acc; }
+  /* タブドラッグ */
+  .tab[draggable="true"] { cursor: grab; }
+  .tab[draggable="true"]:active { cursor: grabbing; opacity: 0.6; }
+  .tab.drag-over { border-left: 2px solid #007acc; }
+
+  /* ===== ツールバー ===== */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    background: #2d2d2d;
+    border-bottom: 1px solid #3c3c3c;
+    padding: 6px 12px;
+    gap: 6px;
+    min-height: 44px;
+  }
+  .toolbar-group {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .toolbar-sep {
+    width: 1px;
+    height: 24px;
+    background: #555;
+    margin: 0 8px;
+  }
+  .toolbar-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border: 1px solid #555;
+    border-radius: 4px;
+    background: #363636;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.15s;
+  }
+  .toolbar-btn:hover { background: #444; border-color: #007acc; color: #fff; }
+  .toolbar-btn .icon { font-size: 15px; }
+  .toolbar-btn.primary {
+    background: #007acc;
+    border-color: #007acc;
+    color: #fff;
+  }
+  .toolbar-btn.primary:hover { background: #1a8ad4; }
+  .toolbar-btn.success { border-color: #4ec9b0; color: #4ec9b0; }
+  .toolbar-btn.success:hover { background: #4ec9b022; }
+  .toolbar-btn.warning { border-color: #dcdcaa; color: #dcdcaa; }
+  .toolbar-btn.warning:hover { background: #dcdcaa22; }
+  .toolbar-btn.info { border-color: #9cdcfe; color: #9cdcfe; }
+  .toolbar-btn.info:hover { background: #9cdcfe22; }
+
+  .toolbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .branch-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    background: #1e1e1e;
+    border: 1px solid #555;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #4fc1ff;
+    cursor: pointer;
+  }
+  .branch-selector:hover { border-color: #007acc; }
+
+  /* ===== メインコンテンツ ===== */
+  .main-content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* 左パネル: 変更ファイル一覧 */
+  .left-panel {
+    width: 320px;
+    min-width: 280px;
+    background: #252526;
+    border-right: 1px solid #3c3c3c;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-header {
+    padding: 10px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #888;
+    border-bottom: 1px solid #3c3c3c;
+    display: flex;
+    align-items: center;
+    justify-content: between;
+    gap: 8px;
+  }
+  .panel-header .count {
+    background: #007acc;
+    color: #fff;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-left: auto;
+  }
+
+  /* コミットエリア */
+  .commit-area {
+    padding: 10px;
+    border-bottom: 1px solid #3c3c3c;
+  }
+  .commit-input {
+    width: 100%;
+    background: #1e1e1e;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #ccc;
+    padding: 8px 10px;
+    font-size: 13px;
+    resize: none;
+    height: 60px;
+    font-family: inherit;
+  }
+  .commit-input::placeholder { color: #666; }
+  .commit-input:focus { outline: none; border-color: #007acc; }
+  .commit-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .commit-actions .btn-sm {
+    flex: 1;
+    padding: 5px 8px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    background: #363636;
+    color: #ccc;
+    font-size: 12px;
+    cursor: pointer;
+    text-align: center;
+  }
+  .commit-actions .btn-sm.primary {
+    background: #007acc;
+    border-color: #007acc;
+    color: #fff;
+  }
+
+  /* コミットエリア: Amend */
+  .amend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: #999;
+  }
+  .amend-row input[type="checkbox"] { accent-color: #dcdcaa; }
+  .amend-row label { cursor: pointer; }
+
+  /* ファイルリスト */
+  .file-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .file-section-header {
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #2a2a2a;
+  }
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.1s;
+  }
+  .file-item:hover { background: #2a2d2e; }
+  .file-item.selected { background: #094771; }
+  .file-item.selected:hover { background: #0a5286; }
+  .file-item input[type="checkbox"] {
+    accent-color: #007acc;
+  }
+  .file-item .file-name { flex: 1; }
+  .file-item .file-status {
+    font-size: 11px;
+    font-weight: bold;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .file-status.modified { color: #e2c08d; background: #e2c08d22; }
+  .file-status.new { color: #4ec9b0; background: #4ec9b022; }
+  .file-status.deleted { color: #f44747; background: #f4474722; }
+
+  /* ===== 右クリックコンテキストメニュー ===== */
+  .context-menu {
+    display: none;
+    position: fixed;
+    background: #2d2d2d;
+    border: 1px solid #555;
+    border-radius: 6px;
+    min-width: 200px;
+    box-shadow: 0 4px 16px #00000088;
+    z-index: 200;
+    overflow: hidden;
+    padding: 4px 0;
+  }
+  .context-menu.show { display: block; }
+  .context-menu .cm-item {
+    padding: 7px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #ccc;
+  }
+  .context-menu .cm-item:hover { background: #094771; color: #fff; }
+  .context-menu .cm-item .cm-icon { font-size: 14px; width: 18px; text-align: center; }
+  .context-menu .cm-item .cm-shortcut { margin-left: auto; color: #666; font-size: 11px; }
+  .context-menu .cm-sep { height: 1px; background: #3c3c3c; margin: 4px 0; }
+  .context-menu .cm-item.danger { color: #f44747; }
+  .context-menu .cm-item.danger:hover { background: #5a1d1d; }
+  .context-menu .cm-header {
+    padding: 5px 16px 3px;
+    font-size: 10px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* 選択ヒント */
+  .selection-hint {
+    padding: 6px 12px;
+    font-size: 11px;
+    color: #4fc1ff;
+    background: #094771;
+    border-bottom: 1px solid #3c3c3c;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .selection-hint .hint-key {
+    background: #363636;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 0px 5px;
+    font-size: 10px;
+    font-family: 'Consolas', monospace;
+    color: #ccc;
+  }
+
+  /* コミットログ検索バー */
+  .log-search {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px;
+    background: #252526;
+    border-bottom: 1px solid #3c3c3c;
+    gap: 8px;
+  }
+  .log-search input {
+    flex: 1;
+    background: #1e1e1e;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #ccc;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+  .log-search input:focus { outline: none; border-color: #007acc; }
+  .log-search input::placeholder { color: #666; }
+  .log-search .search-icon { color: #888; font-size: 13px; }
+
+  /* コミットグラフ */
+  .graph-cell {
+    width: 100px;
+    min-width: 100px;
+    position: relative;
+    height: 100%;
+  }
+  .graph-cell svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* 右パネル: コミットログ */
+  .right-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* コミットログテーブル */
+  .log-table {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 13px;
+  }
+  .log-row {
+    display: grid;
+    grid-template-columns: 100px 70px 1fr 140px 100px;
+    padding: 0 12px 0 0;
+    border-bottom: 1px solid #2a2a2a;
+    align-items: center;
+    cursor: pointer;
+    transition: background 0.1s;
+    height: 32px;
+  }
+  .log-row:hover { background: #2a2d2e; }
+  .log-row .hash {
+    color: #4fc1ff;
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+  }
+  .log-row .message { color: #ccc; }
+  .log-row .message .branch-tag {
+    display: inline-block;
+    font-size: 10px;
+    background: #4ec9b033;
+    color: #4ec9b0;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-right: 6px;
+  }
+  .log-row .author { color: #888; font-size: 12px; }
+  .log-row .date { color: #666; font-size: 12px; text-align: right; }
+
+  .log-header {
+    display: grid;
+    grid-template-columns: 100px 70px 1fr 140px 100px;
+    padding: 8px 12px 8px 0;
+    background: #2d2d2d;
+    border-bottom: 1px solid #3c3c3c;
+    font-size: 11px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* ===== D&D オーバーレイ ===== */
+  .drop-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #007acc44;
+    z-index: 300;
+    align-items: center;
+    justify-content: center;
+    border: 3px dashed #007acc;
+  }
+  .drop-overlay.show { display: flex; }
+  .drop-overlay .drop-message {
+    background: #2d2d2d;
+    border: 2px solid #007acc;
+    border-radius: 12px;
+    padding: 40px 60px;
+    text-align: center;
+  }
+  .drop-overlay .drop-message .drop-icon { font-size: 48px; margin-bottom: 12px; }
+  .drop-overlay .drop-message .drop-text { font-size: 18px; color: #fff; }
+  .drop-overlay .drop-message .drop-sub { font-size: 13px; color: #888; margin-top: 6px; }
+
+  /* ===== Diff モーダル ===== */
+  .diff-modal {
+    background: #1e1e1e;
+    border: 1px solid #555;
+    border-radius: 8px;
+    width: 720px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px #00000088;
+  }
+  .diff-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: #2d2d2d;
+    border-bottom: 1px solid #3c3c3c;
+    border-radius: 8px 8px 0 0;
+  }
+  .diff-header h3 { font-size: 14px; color: #fff; }
+  .diff-header .diff-close {
+    cursor: pointer;
+    color: #888;
+    font-size: 18px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+  }
+  .diff-header .diff-close:hover { background: #ff5555; color: #fff; }
+  .diff-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .diff-hunk-header {
+    padding: 4px 12px;
+    background: #1a3a5c;
+    color: #569cd6;
+    font-size: 12px;
+  }
+  .diff-line {
+    display: flex;
+    padding: 0 12px;
+    min-height: 20px;
+  }
+  .diff-line .line-no {
+    width: 45px;
+    min-width: 45px;
+    text-align: right;
+    padding-right: 8px;
+    color: #555;
+    user-select: none;
+    font-size: 12px;
+  }
+  .diff-line .line-content {
+    flex: 1;
+    white-space: pre;
+    padding-left: 8px;
+  }
+  .diff-line.add { background: #1a3d1a; }
+  .diff-line.add .line-content { color: #4ec9b0; }
+  .diff-line.del { background: #3d1a1a; }
+  .diff-line.del .line-content { color: #f44747; }
+  .diff-line.ctx .line-content { color: #888; }
+
+  /* ===== Stash ドロップダウン ===== */
+  .stash-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(38px + 44px + 4px);
+    left: 340px;
+    background: #2d2d2d;
+    border: 1px solid #555;
+    border-radius: 6px;
+    width: 320px;
+    box-shadow: 0 4px 16px #00000066;
+    z-index: 50;
+    overflow: hidden;
+  }
+  .stash-dropdown.show { display: block; }
+  .stash-dropdown .sd-header {
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #888;
+    border-bottom: 1px solid #3c3c3c;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .stash-dropdown .sd-item {
+    padding: 7px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #ccc;
+  }
+  .stash-dropdown .sd-item:hover { background: #094771; }
+  .stash-dropdown .sd-item .sd-index {
+    color: #4fc1ff;
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    min-width: 60px;
+  }
+  .stash-dropdown .sd-item .sd-msg { flex: 1; }
+  .stash-dropdown .sd-item .sd-date { color: #666; font-size: 11px; }
+  .stash-dropdown .sd-empty {
+    padding: 16px;
+    text-align: center;
+    color: #666;
+    font-size: 12px;
+    font-style: italic;
+  }
+
+  /* ===== ステータスバー ===== */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    background: #007acc;
+    color: #fff;
+    font-size: 12px;
+    padding: 2px 12px;
+    height: 24px;
+    min-height: 24px;
+    gap: 16px;
+  }
+  .status-bar .sep { width: 1px; height: 14px; background: #ffffff44; }
+  .status-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .status-right { margin-left: auto; display: flex; gap: 16px; }
+
+  /* ===== モーダル ===== */
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #00000088;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    background: #2d2d2d;
+    border: 1px solid #555;
+    border-radius: 8px;
+    padding: 24px;
+    width: 480px;
+    box-shadow: 0 8px 32px #00000088;
+  }
+  .modal h3 {
+    font-size: 16px;
+    color: #fff;
+    margin-bottom: 16px;
+  }
+  .modal-field {
+    margin-bottom: 14px;
+  }
+  .modal-field label {
+    display: block;
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 4px;
+  }
+  .modal-field input {
+    width: 100%;
+    padding: 8px 10px;
+    background: #1e1e1e;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 13px;
+  }
+  .modal-field input:focus { outline: none; border-color: #007acc; }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+  }
+  .modal-actions button {
+    padding: 6px 18px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .modal-actions .btn-cancel { background: #363636; color: #ccc; }
+  .modal-actions .btn-ok { background: #007acc; border-color: #007acc; color: #fff; }
+
+  /* ===== ラベル ===== */
+  .mockup-label {
+    position: fixed;
+    top: 8px;
+    right: 12px;
+    background: #f44747;
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 4px;
+    z-index: 999;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+
+  /* スクロールバー */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: #1e1e1e; }
+  ::-webkit-scrollbar-thumb { background: #424242; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+  /* ===== ブランチドロップダウン (モックアップ) ===== */
+  .branch-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(38px + 44px + 4px);
+    right: 12px;
+    background: #2d2d2d;
+    border: 1px solid #555;
+    border-radius: 6px;
+    width: 260px;
+    box-shadow: 0 4px 16px #00000066;
+    z-index: 50;
+    overflow: hidden;
+  }
+  .branch-dropdown.show { display: block; }
+  .branch-dropdown .dd-header {
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #888;
+    border-bottom: 1px solid #3c3c3c;
+    font-weight: 600;
+  }
+  .branch-dropdown .dd-item {
+    padding: 7px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .branch-dropdown .dd-item:hover { background: #094771; }
+  .branch-dropdown .dd-item.current { color: #4fc1ff; }
+  .branch-dropdown .dd-item .check { font-size: 14px; width: 16px; }
+
+  /* ===== タブコンテキスト ===== */
+  .mock-note {
+    text-align: center;
+    padding: 20px;
+    color: #555;
+    font-size: 12px;
+    font-style: italic;
+    border-top: 1px solid #2a2a2a;
+  }
+</style>
+</head>
+<body>
+
+<div class="mockup-label">MOCKUP</div>
+
+<!-- タブバー -->
+<div class="tab-bar">
+  <div class="tab active" draggable="true">
+    <span>📁 my-webapp</span>
+    <span class="branch-badge">main</span>
+    <span class="close-btn">×</span>
+  </div>
+  <div class="tab" draggable="true">
+    <span>📁 api-server</span>
+    <span class="branch-badge">develop</span>
+    <span class="close-btn">×</span>
+  </div>
+  <div class="tab" draggable="true">
+    <span>📁 shared-lib</span>
+    <span class="branch-badge">feature/auth</span>
+    <span class="close-btn">×</span>
+  </div>
+  <div class="tab-add" title="プロジェクトを追加（ドラッグ&ドロップも可）">+</div>
+</div>
+
+<!-- ツールバー -->
+<div class="toolbar">
+  <div class="toolbar-group">
+    <button class="toolbar-btn">
+      <span class="icon">🔄</span> Fetch
+    </button>
+    <button class="toolbar-btn success">
+      <span class="icon">⬇️</span> Pull
+    </button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn warning">
+      <span class="icon">⬆️</span> Push
+    </button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn info" onclick="toggleStashDropdown()">
+      <span class="icon">📦</span> Stash
+      <span style="font-size:10px">▼</span>
+    </button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn" title="エクスプローラーで開く">
+      <span class="icon">📂</span> Explorer
+    </button>
+    <button class="toolbar-btn" title="ターミナルで開く">
+      <span class="icon">💻</span> Terminal
+    </button>
+  </div>
+
+  <div class="toolbar-right">
+    <div class="branch-selector" onclick="toggleDropdown()">
+      <span>🔀</span>
+      <span>main</span>
+      <span style="font-size:10px">▼</span>
+    </div>
+  </div>
+</div>
+
+<!-- ブランチドロップダウン -->
+<div class="branch-dropdown" id="branch-dropdown">
+  <div class="dd-header">ローカルブランチ</div>
+  <div class="dd-item current"><span class="check">✓</span> main</div>
+  <div class="dd-item"><span class="check"></span> develop</div>
+  <div class="dd-item"><span class="check"></span> feature/auth</div>
+  <div class="dd-item"><span class="check"></span> feature/ui-redesign</div>
+  <div class="dd-header">リモートブランチ</div>
+  <div class="dd-item"><span class="check"></span> origin/main</div>
+  <div class="dd-item"><span class="check"></span> origin/develop</div>
+  <div class="dd-item"><span class="check"></span> origin/release/v2.0</div>
+</div>
+
+<!-- Stash ドロップダウン -->
+<div class="stash-dropdown" id="stash-dropdown">
+  <div class="sd-header">
+    <span>Stash 一覧</span>
+    <button style="background:#4ec9b0;border:none;color:#1e1e1e;padding:2px 10px;border-radius:3px;cursor:pointer;font-size:11px" title="現在の変更をStash">+ New Stash</button>
+  </div>
+  <div class="sd-item">
+    <span class="sd-index">stash@{0}</span>
+    <span class="sd-msg">WIP: ダークモード作業中</span>
+    <span class="sd-date">2h ago</span>
+  </div>
+  <div class="sd-item">
+    <span class="sd-index">stash@{1}</span>
+    <span class="sd-msg">APIリファクタリング途中</span>
+    <span class="sd-date">1d ago</span>
+  </div>
+</div>
+
+<!-- メインコンテンツ -->
+<div class="main-content">
+
+  <!-- 左パネル: 変更ファイル -->
+  <div class="left-panel">
+    <!-- コミットエリア -->
+    <div class="commit-area">
+      <textarea class="commit-input" placeholder="コミットメッセージを入力..."></textarea>
+      <div class="commit-actions">
+        <div class="btn-sm" title="全ファイルをステージ">Stage All</div>
+        <div class="btn-sm primary">✓ Commit</div>
+      </div>
+      <div class="amend-row">
+        <input type="checkbox" id="amend-check">
+        <label for="amend-check">Amend（直前のコミットを修正）</label>
+      </div>
+    </div>
+
+    <div class="panel-header">
+      変更ファイル
+      <span class="count">5</span>
+    </div>
+
+    <div class="selection-hint">
+      <span class="hint-key">Ctrl</span>+Click で複数選択　
+      <span class="hint-key">Shift</span>+Click で範囲選択　
+      右クリックで操作メニュー
+    </div>
+
+    <div class="file-list" id="file-list">
+      <div class="file-section-header">📝 Staged (2)</div>
+      <div class="file-item selected" oncontextmenu="showContextMenu(event, this)">
+        <input type="checkbox" checked>
+        <span class="file-name">src/components/Header.tsx</span>
+        <span class="file-status modified">M</span>
+      </div>
+      <div class="file-item selected" oncontextmenu="showContextMenu(event, this)">
+        <input type="checkbox" checked>
+        <span class="file-name">src/styles/global.css</span>
+        <span class="file-status modified">M</span>
+      </div>
+
+      <div class="file-section-header">📄 Unstaged (3)</div>
+      <div class="file-item" oncontextmenu="showContextMenu(event, this)">
+        <input type="checkbox">
+        <span class="file-name">src/pages/Dashboard.tsx</span>
+        <span class="file-status modified">M</span>
+      </div>
+      <div class="file-item" oncontextmenu="showContextMenu(event, this)">
+        <input type="checkbox">
+        <span class="file-name">src/utils/api.ts</span>
+        <span class="file-status new">A</span>
+      </div>
+      <div class="file-item" oncontextmenu="showContextMenu(event, this)">
+        <input type="checkbox">
+        <span class="file-name">README.md</span>
+        <span class="file-status deleted">D</span>
+      </div>
+    </div>
+
+    <div class="mock-note">チェックボックス or 右クリックでステージング操作</div>
+  </div>
+
+  <!-- 右パネル: コミットログ -->
+  <div class="right-panel">
+    <div class="panel-header">
+      コミットログ
+      <span class="count">最新 20 件</span>
+    </div>
+    <div class="log-search">
+      <span class="search-icon">🔍</span>
+      <input type="text" placeholder="コミットメッセージまたは作者名で検索...">
+    </div>
+    <div class="log-header">
+      <span>Graph</span>
+      <span>Hash</span>
+      <span>メッセージ</span>
+      <span>作者</span>
+      <span style="text-align:right">日付</span>
+    </div>
+    <div class="log-table">
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/></svg></div>
+        <span class="hash">a3f7c21</span>
+        <span class="message"><span class="branch-tag">HEAD → main</span>Fix responsive layout</span>
+        <span class="author">Tanaka Taro</span>
+        <span class="date">2 hours ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/><line x1="50" y1="0" x2="50" y2="32" stroke="#c586c0" stroke-width="2"/></svg></div>
+        <span class="hash">e92b1d4</span>
+        <span class="message">Add dark mode support</span>
+        <span class="author">Tanaka Taro</span>
+        <span class="date">5 hours ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/><line x1="50" y1="0" x2="20" y2="16" stroke="#c586c0" stroke-width="2"/></svg></div>
+        <span class="hash">1c84fa9</span>
+        <span class="message"><span class="branch-tag">origin/main</span>Merge branch 'feature/dark-mode'</span>
+        <span class="author">Suzuki Hanako</span>
+        <span class="date">1 day ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="16" x2="50" y2="32" stroke="#dcdcaa" stroke-width="2"/></svg></div>
+        <span class="hash">d47e6b3</span>
+        <span class="message">Refactor authentication module</span>
+        <span class="author">Tanaka Taro</span>
+        <span class="date">2 days ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/><line x1="50" y1="0" x2="50" y2="32" stroke="#dcdcaa" stroke-width="2"/></svg></div>
+        <span class="hash">8f2a19c</span>
+        <span class="message">Add unit tests for user service</span>
+        <span class="author">Yamada Jiro</span>
+        <span class="date">3 days ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/><circle cx="50" cy="16" r="5" fill="#dcdcaa"/><line x1="50" y1="0" x2="50" y2="11" stroke="#dcdcaa" stroke-width="2"/></svg></div>
+        <span class="hash">b6c3e71</span>
+        <span class="message"><span class="branch-tag" style="background:#dcdcaa33;color:#dcdcaa">feature/api</span>Implement API rate limiting</span>
+        <span class="author">Suzuki Hanako</span>
+        <span class="date">4 days ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/></svg></div>
+        <span class="hash">3a91df5</span>
+        <span class="message">Fix SQL injection vulnerability</span>
+        <span class="author">Tanaka Taro</span>
+        <span class="date">5 days ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/></svg></div>
+        <span class="hash">7e4b2a8</span>
+        <span class="message">Add pagination component</span>
+        <span class="author">Yamada Jiro</span>
+        <span class="date">1 week ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/><line x1="20" y1="21" x2="20" y2="32" stroke="#4ec9b0" stroke-width="2"/></svg></div>
+        <span class="hash">c5d9f12</span>
+        <span class="message">Update README with setup instructions</span>
+        <span class="author">Tanaka Taro</span>
+        <span class="date">1 week ago</span>
+      </div>
+      <div class="log-row">
+        <div class="graph-cell"><svg viewBox="0 0 100 32"><circle cx="20" cy="16" r="5" fill="#4ec9b0"/><line x1="20" y1="0" x2="20" y2="11" stroke="#4ec9b0" stroke-width="2"/></svg></div>
+        <span class="hash">f1a8e34</span>
+        <span class="message">Initial project setup</span>
+        <span class="author">Tanaka Taro</span>
+        <span class="date">2 weeks ago</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ステータスバー -->
+<div class="status-bar">
+  <span class="status-item">🔀 main</span>
+  <span class="sep"></span>
+  <span class="status-item">↑ 2 ahead</span>
+  <span class="status-item">↓ 0 behind</span>
+  <span class="sep"></span>
+  <span class="status-item">📁 F:\projects\my-webapp</span>
+  <span class="status-right">
+    <span class="status-item">5 changes</span>
+    <span class="status-item">GitGUI v0.1.0</span>
+  </span>
+</div>
+
+
+
+<!-- D&D ドロップオーバーレイ -->
+<div class="drop-overlay" id="drop-overlay">
+  <div class="drop-message">
+    <div class="drop-icon">📂</div>
+    <div class="drop-text">フォルダをドロップしてリポジトリを追加</div>
+    <div class="drop-sub">Git リポジトリのフォルダをここにドロップしてください</div>
+  </div>
+</div>
+
+<!-- Diff モーダル -->
+<div class="modal-overlay" id="diff-modal" style="display:none">
+  <div class="diff-modal">
+    <div class="diff-header">
+      <h3>📄 src/components/Header.tsx</h3>
+      <span class="diff-close" onclick="toggleModal('diff-modal')">×</span>
+    </div>
+    <div class="diff-body">
+      <div class="diff-hunk-header">@@ -12,7 +12,9 @@ export function Header() {</div>
+      <div class="diff-line ctx"><span class="line-no">12</span><span class="line-no">12</span><span class="line-content">  return (</span></div>
+      <div class="diff-line ctx"><span class="line-no">13</span><span class="line-no">13</span><span class="line-content">    &lt;header className="app-header"&gt;</span></div>
+      <div class="diff-line del"><span class="line-no">14</span><span class="line-no"></span><span class="line-content">-      &lt;h1&gt;My App&lt;/h1&gt;</span></div>
+      <div class="diff-line add"><span class="line-no"></span><span class="line-no">14</span><span class="line-content">+      &lt;h1 className="title"&gt;My App&lt;/h1&gt;</span></div>
+      <div class="diff-line add"><span class="line-no"></span><span class="line-no">15</span><span class="line-content">+      &lt;ThemeToggle /&gt;</span></div>
+      <div class="diff-line add"><span class="line-no"></span><span class="line-no">16</span><span class="line-content">+      &lt;UserMenu /&gt;</span></div>
+      <div class="diff-line ctx"><span class="line-no">15</span><span class="line-no">17</span><span class="line-content">    &lt;/header&gt;</span></div>
+      <div class="diff-line ctx"><span class="line-no">16</span><span class="line-no">18</span><span class="line-content">  );</span></div>
+      <div class="diff-line ctx"><span class="line-no">17</span><span class="line-no">19</span><span class="line-content">}</span></div>
+      <div class="diff-hunk-header">@@ -25,3 +27,8 @@ function NavBar() {</div>
+      <div class="diff-line ctx"><span class="line-no">25</span><span class="line-no">27</span><span class="line-content">  const links = ['Home', 'About', 'Contact'];</span></div>
+      <div class="diff-line ctx"><span class="line-no">26</span><span class="line-no">28</span><span class="line-content">  return &lt;nav&gt;{links.map(l =&gt; &lt;a&gt;{l}&lt;/a&gt;)}&lt;/nav&gt;;</span></div>
+      <div class="diff-line ctx"><span class="line-no">27</span><span class="line-no">29</span><span class="line-content">}</span></div>
+      <div class="diff-line add"><span class="line-no"></span><span class="line-no">30</span><span class="line-content">+</span></div>
+      <div class="diff-line add"><span class="line-no"></span><span class="line-no">31</span><span class="line-content">+function ThemeToggle() {</span></div>
+      <div class="diff-line add"><span class="line-no"></span><span class="line-no">32</span><span class="line-content">+  const [dark, setDark] = useState(true);</span></div>
+      <div class="diff-line add"><span class="line-no"></span><span class="line-no">33</span><span class="line-content">+  return &lt;button onClick={() =&gt; setDark(!dark)}&gt;🌙&lt;/button&gt;;</span></div>
+      <div class="diff-line add"><span class="line-no"></span><span class="line-no">34</span><span class="line-content">+}</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- 右クリックコンテキストメニュー -->
+<div class="context-menu" id="context-menu">
+  <div class="cm-header">選択中: <span id="cm-count">2</span> ファイル</div>
+  <div class="cm-item" onclick="hideContextMenu()">
+    <span class="cm-icon">📥</span> Stage
+    <span class="cm-shortcut">Enter</span>
+  </div>
+  <div class="cm-item" onclick="hideContextMenu()">
+    <span class="cm-icon">📤</span> Unstage
+  </div>
+  <div class="cm-sep"></div>
+  <div class="cm-item" onclick="hideContextMenu(); toggleModal('diff-modal')">
+    <span class="cm-icon">📄</span> Diff を表示
+    <span class="cm-shortcut">D</span>
+  </div>
+  <div class="cm-item" onclick="hideContextMenu()">
+    <span class="cm-icon">📋</span> パスをコピー
+    <span class="cm-shortcut">Ctrl+C</span>
+  </div>
+  <div class="cm-sep"></div>
+  <div class="cm-item danger" onclick="hideContextMenu()">
+    <span class="cm-icon">🗑️</span> Discard Changes
+  </div>
+</div>
+
+<script>
+  // ===== ドロップダウン & モーダル =====
+  function toggleDropdown() {
+    document.getElementById('branch-dropdown').classList.toggle('show');
+    document.getElementById('stash-dropdown').classList.remove('show');
+  }
+  function toggleStashDropdown() {
+    document.getElementById('stash-dropdown').classList.toggle('show');
+    document.getElementById('branch-dropdown').classList.remove('show');
+  }
+  function toggleModal(id) {
+    const el = document.getElementById(id);
+    el.style.display = el.style.display === 'none' ? 'flex' : 'none';
+  }
+
+  // ===== 右クリックコンテキストメニュー =====
+  function showContextMenu(e, fileItem) {
+    e.preventDefault();
+    if (!fileItem.classList.contains('selected')) {
+      document.querySelectorAll('.file-item.selected').forEach(f => f.classList.remove('selected'));
+      fileItem.classList.add('selected');
+    }
+    const selectedCount = document.querySelectorAll('.file-item.selected').length;
+    document.getElementById('cm-count').textContent = selectedCount;
+
+    const menu = document.getElementById('context-menu');
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.classList.add('show');
+  }
+  function hideContextMenu() {
+    document.getElementById('context-menu').classList.remove('show');
+  }
+
+  // ===== ファイル選択 (Ctrl+Click / Shift+Click / Click) =====
+  let lastClickedIndex = -1;
+  document.querySelectorAll('.file-item').forEach((item, index) => {
+    item.addEventListener('click', (e) => {
+      if (e.target.type === 'checkbox') return;
+      if (e.ctrlKey) {
+        item.classList.toggle('selected');
+      } else if (e.shiftKey && lastClickedIndex >= 0) {
+        const items = document.querySelectorAll('.file-item');
+        const start = Math.min(lastClickedIndex, index);
+        const end = Math.max(lastClickedIndex, index);
+        items.forEach((fi, i) => {
+          if (i >= start && i <= end) fi.classList.add('selected');
+        });
+      } else {
+        document.querySelectorAll('.file-item.selected').forEach(f => f.classList.remove('selected'));
+        item.classList.add('selected');
+      }
+      lastClickedIndex = index;
+    });
+    // ダブルクリックで Diff 表示
+    item.addEventListener('dblclick', () => {
+      toggleModal('diff-modal');
+    });
+  });
+
+  // ===== Amend チェックボックス =====
+  document.getElementById('amend-check')?.addEventListener('change', (e) => {
+    const textarea = document.querySelector('.commit-input');
+    if (e.target.checked) {
+      textarea.value = 'Fix responsive layout';
+      textarea.placeholder = '直前のコミットメッセージを編集...';
+    } else {
+      textarea.value = '';
+      textarea.placeholder = 'コミットメッセージを入力...';
+    }
+  });
+
+  // ===== D&D ドロップオーバーレイ (モックアップデモ) =====
+  let dragCounter = 0;
+  document.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    document.getElementById('drop-overlay').classList.add('show');
+  });
+  document.addEventListener('dragleave', (e) => {
+    dragCounter--;
+    if (dragCounter === 0) {
+      document.getElementById('drop-overlay').classList.remove('show');
+    }
+  });
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    document.getElementById('drop-overlay').classList.remove('show');
+  });
+
+  // ===== メニュー非表示 =====
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.branch-selector') && !e.target.closest('.branch-dropdown')) {
+      document.getElementById('branch-dropdown').classList.remove('show');
+    }
+    if (!e.target.closest('.toolbar-btn.info') && !e.target.closest('.stash-dropdown')) {
+      document.getElementById('stash-dropdown').classList.remove('show');
+    }
+    if (!e.target.closest('.context-menu')) {
+      hideContextMenu();
+    }
+  });
+</script>
+
+</body>
+</html>
