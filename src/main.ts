@@ -96,6 +96,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 // =========================================
 
 function setupToolbarEvents(): void {
+  // ツールバーの右クリックメニュー抑制
+  $("toolbar").addEventListener("contextmenu", (e) => e.preventDefault());
+
   $("btn-fetch").addEventListener("click", async () => {
     const path = tabManager.getActivePath();
     if (!path) return;
@@ -1006,9 +1009,50 @@ function closeDiffModal(): void {
 // =========================================
 
 function setupCommitDetailModal(): void {
-  $("btn-cd-close").addEventListener("click", closeCommitDetailModal);
+  $('btn-cd-close').addEventListener('click', closeCommitDetailModal);
   $("commit-detail-modal").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) closeCommitDetailModal();
+  });
+
+  // ブロックコピーの共通ヘルパー
+  function blockCopyFeedback(btn: HTMLButtonElement): void {
+    const orig = btn.textContent;
+    btn.textContent = "\u2714 コピー済";
+    setTimeout(() => { btn.textContent = orig; }, 1000);
+  }
+
+  // メタ情報ブロックをコピー
+  $("cd-copy-meta").addEventListener("click", () => {
+    const text = [
+      "Hash: " + $("cd-hash").textContent,
+      "作者: " + $("cd-author").textContent,
+      "日時: " + $("cd-date").textContent,
+      "親コミット: " + $("cd-parents").textContent,
+    ].join("\n");
+    navigator.clipboard.writeText(text).then(() =>
+      blockCopyFeedback($("cd-copy-meta") as HTMLButtonElement)
+    );
+  });
+
+  // メッセージブロックをコピー
+  $("cd-copy-message").addEventListener("click", () => {
+    const text = $("cd-message").textContent || "";
+    navigator.clipboard.writeText(text).then(() =>
+      blockCopyFeedback($("cd-copy-message") as HTMLButtonElement)
+    );
+  });
+
+  // 変更ファイル一覧ブロックをコピー
+  $("cd-copy-files").addEventListener("click", () => {
+    const items = document.querySelectorAll("#cd-files .cd-file-item");
+    const lines = Array.from(items).map((el) => {
+      const status = el.querySelector(".file-status-badge")?.textContent || "";
+      const path = el.querySelector(".file-path")?.textContent || "";
+      return status + " " + path;
+    });
+    navigator.clipboard.writeText(lines.join("\n")).then(() =>
+      blockCopyFeedback($("cd-copy-files") as HTMLButtonElement)
+    );
   });
 }
 
@@ -1210,6 +1254,9 @@ function createLogRow(
 
   // ダブルクリックでコミット詳細を表示
   row.addEventListener("dblclick", () => showCommitDetail(c.hash));
+
+  // 右クリックメニュー抑制
+  row.addEventListener("contextmenu", (e) => e.preventDefault());
 
   // --- SVG グラフ描画 ---
   const cx = gc.column * colSpacing + colSpacing / 2;

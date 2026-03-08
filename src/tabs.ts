@@ -32,6 +32,9 @@ export class TabManager {
     this.tabBar = document.getElementById("tab-bar")!;
     this.addBtn = document.getElementById("btn-add-tab")!;
     this.addBtn.addEventListener("click", () => this.switchToNewTab());
+
+    // タブバー全体の右クリックメニュー抑制
+    this.tabBar.addEventListener("contextmenu", (e) => e.preventDefault());
   }
 
   // ========== データ操作 ==========
@@ -246,6 +249,9 @@ export class TabManager {
         .querySelectorAll(".tab")
         .forEach((t) => t.classList.remove("drag-over"));
     });
+
+    // 右クリックメニュー抑制
+    el.addEventListener("contextmenu", (e) => e.preventDefault());
 
     el.addEventListener("dragover", (e) => {
       e.preventDefault();

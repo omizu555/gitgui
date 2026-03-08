@@ -246,15 +246,23 @@
       <span class="cd-close" id="btn-cd-close">×</span>
     </div>
     <div class="cd-body">
-      <div class="cd-meta">
-        <div class="cd-row"><span class="cd-label">Hash</span><span class="cd-value mono" id="cd-hash"></span></div>
-        <div class="cd-row"><span class="cd-label">作者</span><span class="cd-value" id="cd-author"></span></div>
-        <div class="cd-row"><span class="cd-label">日時</span><span class="cd-value" id="cd-date"></span></div>
-        <div class="cd-row"><span class="cd-label">親コミット</span><span class="cd-value mono" id="cd-parents"></span></div>
+      <div class="cd-block">
+        <div class="cd-block-header"><span>コミット情報</span><button class="cd-copy-block-btn" id="cd-copy-meta" title="コミット情報をコピー">📋 コピー</button></div>
+        <div class="cd-meta">
+          <div class="cd-row"><span class="cd-label">Hash</span><span class="cd-value mono" id="cd-hash"></span></div>
+          <div class="cd-row"><span class="cd-label">作者</span><span class="cd-value" id="cd-author"></span></div>
+          <div class="cd-row"><span class="cd-label">日時</span><span class="cd-value" id="cd-date"></span></div>
+          <div class="cd-row"><span class="cd-label">親コミット</span><span class="cd-value mono" id="cd-parents"></span></div>
+        </div>
       </div>
-      <div class="cd-message" id="cd-message"></div>
-      <div class="cd-files-header">変更ファイル <span class="count" id="cd-file-count">0</span></div>
-      <div class="cd-files" id="cd-files"></div>
+      <div class="cd-block">
+        <div class="cd-block-header"><span>メッセージ</span><button class="cd-copy-block-btn" id="cd-copy-message" title="メッセージをコピー">📋 コピー</button></div>
+        <div class="cd-message" id="cd-message"></div>
+      </div>
+      <div class="cd-block">
+        <div class="cd-block-header"><span>変更ファイル <span class="count" id="cd-file-count">0</span></span><button class="cd-copy-block-btn" id="cd-copy-files" title="ファイル一覧をコピー">📋 コピー</button></div>
+        <div class="cd-files" id="cd-files"></div>
+      </div>
     </div>
   </div>
 </div>
