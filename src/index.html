@@ -8,11 +8,11 @@
 </head>
 <body>
 
-<!-- ===== タブバー ===== -->
-<div class="tab-bar" id="tab-bar">
-  <!-- タブはJSで動的に生成 -->
-  <div class="tab-add" id="btn-add-tab" title="プロジェクトを追加（D&Dも可）">+</div>
-</div>
+<!-- ===== アプリ本体ラッパー ===== -->
+<div class="app-body">
+
+<!-- ===== メインエリア ===== -->
+<div class="app-main">
 
 <!-- ===== ツールバー (プロジェクトタブ用) ===== -->
 <div class="toolbar" id="toolbar">
@@ -164,6 +164,19 @@
     <div class="recent-list" id="recent-list"></div>
   </div>
 </div>
+
+</div><!-- /.app-main -->
+
+<!-- ===== タブリサイズハンドル ===== -->
+<div class="tab-resize-handle" id="tab-resize-handle"></div>
+
+<!-- ===== タブバー (縦タブ: 右側) ===== -->
+<div class="tab-bar" id="tab-bar">
+  <!-- タブはJSで動的に生成 -->
+  <div class="tab-add" id="btn-add-tab" title="プロジェクトを追加（D&Dも可）">+</div>
+</div>
+
+</div><!-- /.app-body -->
 
 <!-- ===== Clone モーダル ===== -->
 <div class="modal-overlay" id="clone-modal">

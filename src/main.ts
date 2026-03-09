@@ -70,6 +70,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupDiffModal();
   setupCommitDetailModal();
   setupDragAndDrop();
+  setupTabResize();
   setupKeyboardShortcuts();
   setupLogSearch();
   setupLogScrollLoad();
@@ -1113,6 +1114,39 @@ function closeCommitDetailModal(): void {
 // =========================================
 //  D&D リポジトリ追加
 // =========================================
+
+// =========================================
+//  タブバーリサイズ
+// =========================================
+
+function setupTabResize(): void {
+  const handle = $("tab-resize-handle");
+  const tabBar = $("tab-bar");
+  let startX = 0;
+  let startW = 0;
+
+  handle.addEventListener("mousedown", (e: MouseEvent) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = tabBar.offsetWidth;
+    handle.classList.add("dragging");
+    document.body.style.cursor = "col-resize";
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = startX - ev.clientX;
+      const newW = Math.min(400, Math.max(100, startW + delta));
+      tabBar.style.width = newW + "px";
+    };
+    const onUp = () => {
+      handle.classList.remove("dragging");
+      document.body.style.cursor = "";
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+}
 
 function setupDragAndDrop(): void {
   const overlay = $("drop-overlay");
