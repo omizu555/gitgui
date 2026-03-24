@@ -1006,25 +1006,141 @@ fn build_refs_map(repo: &git2::Repository) -> std::collections::HashMap<String, 
     map
 }
 
-/// コミット時刻をフォーマット
+/// コミット時刻をフォーマット (YYYY/MM/DD HH:MM)
 fn format_commit_time(time: git2::Time) -> String {
     let secs = time.seconds();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    let offset_min = time.offset_minutes();
+    let local_secs = secs + (offset_min as i64) * 60;
 
-    let diff = now - secs;
+    // UNIX epoch からの日時計算
+    let days = local_secs.div_euclid(86400);
+    let day_secs = local_secs.rem_euclid(86400);
+    let hour = day_secs / 3600;
+    let minute = (day_secs % 3600) / 60;
 
-    if diff < 60 {
-        "just now".to_string()
-    } else if diff < 3600 {
-        format!("{} min ago", diff / 60)
-    } else if diff < 86400 {
-        format!("{} hours ago", diff / 3600)
-    } else if diff < 604800 {
-        format!("{} days ago", diff / 86400)
+    // 日数から年月日を算出
+    let (year, month, day) = days_to_ymd(days);
+
+    format!("{:04}/{:02}/{:02} {:02}:{:02}", year, month, day, hour, minute)
+}
+
+/// UNIX epoch からの通算日数を年月日に変換
+fn days_to_ymd(days: i64) -> (i64, i64, i64) {
+    // Civil calendar algorithm
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+// =========================================
+//  Revert / Reset
+// =========================================
+
+/// ハッシュ文字列のバリデーション（hex文字のみ許可）
+fn validate_hash(hash: &str) -> Result<(), String> {
+    if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("無効なコミットハッシュです".to_string());
+    }
+    Ok(())
+}
+
+/// コミットがマージコミットかどうか判定
+fn is_merge_commit(path: &str, hash: &str) -> Result<bool, String> {
+    let repo = git2::Repository::open(path)
+        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+    let oid = git2::Oid::from_str(hash)
+        .map_err(|e| format!("無効なハッシュ: {}", e))?;
+    let commit = repo.find_commit(oid)
+        .map_err(|e| format!("コミットが見つかりません: {}", e))?;
+    Ok(commit.parent_count() > 1)
+}
+
+/// git revert (CLI)
+/// no_commit=false: 取り消しコミットを新規作成
+/// no_commit=true: ワーキングツリーに変更を適用のみ（コミットしない）
+#[tauri::command]
+pub fn git_revert(path: String, hash: String, no_commit: bool) -> Result<String, String> {
+    validate_hash(&hash)?;
+
+    let is_merge = is_merge_commit(&path, &hash)?;
+
+    let mut args = vec!["revert".to_string()];
+    if no_commit {
+        args.push("--no-commit".to_string());
+    }
+    if is_merge {
+        args.push("-m".to_string());
+        args.push("1".to_string());
+    }
+    args.push(hash.clone());
+
+    let mut cmd = Command::new("git");
+    cmd.args(&args).current_dir(&path);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = cmd.output()
+        .map_err(|e| format!("git revert 実行失敗: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        if no_commit {
+            Ok("Revert 適用完了（コミットせず）".to_string())
+        } else {
+            Ok("Revert コミット作成完了".to_string())
+        }
     } else {
-        format!("{} weeks ago", diff / 604800)
+        // コンフリクト発生時は自動 abort して元の状態に戻す
+        if stdout.contains("CONFLICT") || stderr.contains("CONFLICT") || stderr.contains("conflict") {
+            let mut abort_cmd = Command::new("git");
+            abort_cmd.args(["revert", "--abort"]).current_dir(&path);
+            #[cfg(target_os = "windows")]
+            abort_cmd.creation_flags(0x08000000);
+            let _ = abort_cmd.output();
+            Err("コンフリクトが発生したため Revert を中断しました。手動で解決してください。".to_string())
+        } else {
+            Err(format!("Revert 失敗: {}", stderr))
+        }
+    }
+}
+
+/// git reset (CLI)
+/// mode: "hard" = 完全に戻す（変更破棄）, "soft" = HEAD移動のみ（変更をステージに維持）
+#[tauri::command]
+pub fn git_reset(path: String, hash: String, mode: String) -> Result<String, String> {
+    validate_hash(&hash)?;
+
+    // mode バリデーション
+    let reset_mode = match mode.as_str() {
+        "hard" => "--hard",
+        "soft" => "--soft",
+        _ => return Err("無効なリセットモードです（hard または soft のみ）".to_string()),
+    };
+
+    let mut cmd = Command::new("git");
+    cmd.args(["reset", reset_mode, &hash]).current_dir(&path);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = cmd.output()
+        .map_err(|e| format!("git reset 実行失敗: {}", e))?;
+
+    if output.status.success() {
+        if mode == "hard" {
+            Ok("Reset 完了（変更を破棄しました）".to_string())
+        } else {
+            Ok("Reset 完了（変更はステージに維持）".to_string())
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Reset 失敗: {}", stderr))
     }
 }

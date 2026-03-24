@@ -101,6 +101,8 @@ pub fn run() {
             commands::git_ops::open_url_in_browser,
             commands::git_ops::git_ahead_behind,
             commands::git_ops::git_log_search_by_file,
+            commands::git_ops::git_revert,
+            commands::git_ops::git_reset,
             // ブランチ操作
             commands::branch::git_list_branches,
             commands::branch::git_checkout_branch,

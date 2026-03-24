@@ -65,6 +65,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupNewTabEvents();
   setupCommitArea();
   setupContextMenu();
+  setupCommitContextMenu();
   setupBranchSelector();
   setupStashDropdown();
   setupDiffModal();
@@ -713,6 +714,113 @@ async function handleContextAction(action: string): Promise<void> {
 }
 
 // =========================================
+//  コミットログ コンテキストメニュー
+// =========================================
+
+let commitContextHash = "";
+
+function setupCommitContextMenu(): void {
+  const menu = $("commit-context-menu");
+
+  menu.querySelectorAll<HTMLElement>(".cm-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      const action = item.dataset.action;
+      if (action) handleCommitContextAction(action);
+      hideCommitContextMenu();
+    });
+  });
+
+  document.addEventListener("click", () => hideCommitContextMenu());
+  document.addEventListener("contextmenu", (e) => {
+    if (!(e.target as HTMLElement).closest(".log-row")) {
+      hideCommitContextMenu();
+    }
+  });
+}
+
+function showCommitContextMenu(x: number, y: number, hash: string, shortHash: string): void {
+  hideContextMenu();
+  const menu = $("commit-context-menu");
+  commitContextHash = hash;
+  $("ccm-hash").textContent = shortHash;
+
+  // 画面外にはみ出さないよう補正
+  const menuWidth = 280;
+  const menuHeight = 300;
+  const adjustedX = x + menuWidth > window.innerWidth ? window.innerWidth - menuWidth - 8 : x;
+  const adjustedY = y + menuHeight > window.innerHeight ? window.innerHeight - menuHeight - 8 : y;
+
+  menu.style.left = adjustedX + "px";
+  menu.style.top = adjustedY + "px";
+  menu.classList.add("visible");
+}
+
+function hideCommitContextMenu(): void {
+  $("commit-context-menu").classList.remove("visible");
+}
+
+async function handleCommitContextAction(action: string): Promise<void> {
+  const path = tabManager.getActivePath();
+  if (!path || !commitContextHash) return;
+
+  const hash = commitContextHash;
+
+  try {
+    switch (action) {
+      case "show-detail":
+        showCommitDetail(hash);
+        break;
+
+      case "reset-hard": {
+        const confirmed = await confirmDialog(
+          "Reset (Hard) を実行しますか？",
+          "このコミットまで完全に戻します。それ以降の変更はすべて破棄されます。この操作は取り消せません。"
+        );
+        if (confirmed) {
+          setLoading(true, "Reset 実行中...");
+          const result = await invoke<string>("git_reset", {
+            path,
+            hash,
+            mode: "hard",
+          });
+          showToast(result, "success");
+          await refreshAll(path);
+          setLoading(false);
+        }
+        break;
+      }
+
+      case "reset-soft": {
+        const confirmed = await confirmDialog(
+          "Reset (Soft) を実行しますか？",
+          "このコミットまでHEADを戻します。それ以降の変更はステージングエリアに維持されます。"
+        );
+        if (confirmed) {
+          setLoading(true, "Reset 実行中...");
+          const result = await invoke<string>("git_reset", {
+            path,
+            hash,
+            mode: "soft",
+          });
+          showToast(result, "success");
+          await refreshAll(path);
+          setLoading(false);
+        }
+        break;
+      }
+
+      case "copy-hash":
+        await navigator.clipboard.writeText(hash);
+        showToast("ハッシュをコピーしました", "success");
+        break;
+    }
+  } catch (e) {
+    setLoading(false);
+    showToast("操作に失敗: " + e, "error");
+  }
+}
+
+// =========================================
 //  ブランチセレクター
 // =========================================
 
@@ -1289,8 +1397,11 @@ function createLogRow(
   // ダブルクリックでコミット詳細を表示
   row.addEventListener("dblclick", () => showCommitDetail(c.hash));
 
-  // 右クリックメニュー抑制
-  row.addEventListener("contextmenu", (e) => e.preventDefault());
+  // 右クリックでコミットコンテキストメニューを表示
+  row.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showCommitContextMenu(e.clientX, e.clientY, c.hash, c.short_hash);
+  });
 
   // --- SVG グラフ描画 ---
   const cx = gc.column * colSpacing + colSpacing / 2;

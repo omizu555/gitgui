@@ -251,6 +251,25 @@
   </div>
 </div>
 
+<!-- ===== コミットログ コンテキストメニュー ===== -->
+<div class="context-menu" id="commit-context-menu">
+  <div class="cm-header">コミット: <span id="ccm-hash"></span></div>
+  <div class="cm-item" data-action="show-detail">
+    <span class="cm-icon">📋</span> コミット詳細を表示
+  </div>
+  <div class="cm-sep"></div>
+  <div class="cm-item danger" data-action="reset-hard">
+    <span class="cm-icon">⏪</span> Reset: ここまで完全に戻す（変更破棄）
+  </div>
+  <div class="cm-item" data-action="reset-soft">
+    <span class="cm-icon">⏪</span> Reset: ここまで戻す（変更を維持）
+  </div>
+  <div class="cm-sep"></div>
+  <div class="cm-item" data-action="copy-hash">
+    <span class="cm-icon">📋</span> ハッシュをコピー
+  </div>
+</div>
+
 <!-- ===== コミット詳細モーダル ===== -->
 <div class="modal-overlay" id="commit-detail-modal">
   <div class="commit-detail-modal">
