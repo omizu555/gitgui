@@ -50,9 +50,6 @@ impl AppState {
 pub fn add_project(path: String, state: State<'_, AppState>) -> Result<Project, String> {
     // Git リポジトリか検証
     let repo_path = std::path::Path::new(&path);
-    if !repo_path.exists() {
-        return Err("指定されたパスが存在しません".to_string());
-    }
     git2::Repository::open(&path)
         .map_err(|_| "指定されたフォルダは Git リポジトリではありません".to_string())?;
 

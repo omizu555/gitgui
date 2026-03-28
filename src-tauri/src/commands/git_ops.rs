@@ -1,9 +1,17 @@
 use std::process::Command;
 use std::process::Stdio;
 use std::io::Read;
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 use crate::models::{RepoStatus, FileStatus, CommitInfo, CommitDetail, GraphCommit, GraphLine, StashEntry, DiffResult, DiffHunk, DiffLine};
+
+/// Windows でコンソールウィンドウを表示せずにプロセスを起動するためのフラグを設定する。
+/// macOS / Linux ではなにもしない。
+fn hide_console_window(cmd: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+}
 
 /// git status 取得
 #[tauri::command]
@@ -125,8 +133,7 @@ pub fn git_clone(url: String, dest: String) -> Result<String, String> {
 
     let mut cmd = Command::new("git");
     cmd.args(["clone", "--progress", &url]).current_dir(&dest);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    hide_console_window(&mut cmd);
     let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
 
     if success {
@@ -149,8 +156,7 @@ pub fn git_clone(url: String, dest: String) -> Result<String, String> {
 pub fn git_fetch(path: String) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(["fetch", "--all", "--progress"]).current_dir(&path);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    hide_console_window(&mut cmd);
     let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
 
     if success {
@@ -165,8 +171,7 @@ pub fn git_fetch(path: String) -> Result<String, String> {
 pub fn git_pull(path: String) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(["pull", "--progress"]).current_dir(&path);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    hide_console_window(&mut cmd);
     let (success, stdout, stderr) = run_git_command(&mut cmd)?;
 
     if success {
@@ -185,8 +190,7 @@ pub fn git_pull(path: String) -> Result<String, String> {
 pub fn git_push(path: String) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(["push", "--progress"]).current_dir(&path);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    hide_console_window(&mut cmd);
     let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
 
     if success {
@@ -415,54 +419,18 @@ pub fn git_stash_list(path: String) -> Result<Vec<StashEntry>, String> {
     Ok(entries)
 }
 
-/// コミットログ取得
-#[tauri::command]
-pub fn git_log(path: String, count: Option<usize>) -> Result<Vec<CommitInfo>, String> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
-
-    let mut revwalk = repo.revwalk().map_err(|e| e.to_string())?;
-    revwalk.push_head().map_err(|e| e.to_string())?;
-    revwalk
-        .set_sorting(git2::Sort::TIME)
-        .map_err(|e| e.to_string())?;
-
-    let max_count = count.unwrap_or(50);
-    let mut commits = Vec::new();
-
-    // ブランチ参照マップ構築
-    let refs_map = build_refs_map(&repo);
-
-    for oid_result in revwalk.take(max_count) {
-        let oid = oid_result.map_err(|e| e.to_string())?;
-        let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
-
-        let hash = oid.to_string();
-        let short_hash = hash[..7].to_string();
-
-        let refs = refs_map
-            .get(&hash)
-            .cloned()
-            .unwrap_or_default();
-
-        let author = commit.author();
-        let date = format_commit_time(author.when());
-
-        commits.push(CommitInfo {
-            hash,
-            short_hash,
-            message: commit.message().unwrap_or("").to_string(),
-            author: author.name().unwrap_or("").to_string(),
-            date,
-            refs,
-        });
-    }
-
-    Ok(commits)
-}
-
 /// コミットグラフ付きログ取得
-/// 各コミットに列位置と描画線情報を付与して返す
+///
+/// 2パス構成でコミットグラフを構築する:
+///   パス1: revwalk でコミットを時系列順に収集し、RawCommit のリストを作成
+///   パス2: active_columns（各列が追跡中のコミットハッシュ）を使ってレイアウトを計算
+///
+/// グラフレイアウトのアルゴリズム:
+///   - 各コミットは active_columns 内の空き列か既存列に配置される
+///   - 第1親は同じ列を引き継ぎ（直線）、第2親以降は新しい列を割り当て（マージ線）
+///   - パススルー線: 自分以外のアクティブ列はそのまま次の行へ直線を引く
+///   - 末尾の空き列は毎行削除してコンパクトに保つ
+///   - 色は12色パレットからラウンドロビンで割り当て
 #[tauri::command]
 pub fn git_log_graph(path: String, count: Option<usize>) -> Result<Vec<GraphCommit>, String> {
     let repo = git2::Repository::open(&path)
@@ -827,8 +795,7 @@ pub fn open_file_default(path: String, file_path: String) -> Result<(), String> 
     let full_path_str = full_path.to_string_lossy().to_string();
     let mut cmd = Command::new("cmd");
     cmd.args(["/c", "start", "", &full_path_str]);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000);
+    hide_console_window(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("ファイルを開けません: {}", e))?;
     Ok(())
@@ -876,8 +843,7 @@ pub fn get_remote_url(path: String) -> Result<Option<String>, String> {
 pub fn open_url_in_browser(url: String) -> Result<(), String> {
     let mut cmd = Command::new("cmd");
     cmd.args(["/c", "start", "", &url]);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000);
+    hide_console_window(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("ブラウザを開けません: {}", e))?;
     Ok(())
@@ -905,8 +871,7 @@ pub fn git_log_search_by_file(path: String, pattern: String, count: Option<usize
         "--",
         &glob,
     ]);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000);
+    hide_console_window(&mut cmd);
 
     let output = cmd.output()
         .map_err(|e| format!("git log 実行失敗: {}", e))?;
@@ -1088,8 +1053,10 @@ fn format_commit_time(time: git2::Time) -> String {
 }
 
 /// UNIX epoch からの通算日数を年月日に変換
+///
+/// Howard Hinnant の civil_from_days アルゴリズムを使用。
+/// 参照: https://howardhinnant.github.io/date_algorithms.html#civil_from_days
 fn days_to_ymd(days: i64) -> (i64, i64, i64) {
-    // Civil calendar algorithm
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = z - era * 146097;
@@ -1115,67 +1082,6 @@ fn validate_hash(hash: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// コミットがマージコミットかどうか判定
-fn is_merge_commit(path: &str, hash: &str) -> Result<bool, String> {
-    let repo = git2::Repository::open(path)
-        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
-    let oid = git2::Oid::from_str(hash)
-        .map_err(|e| format!("無効なハッシュ: {}", e))?;
-    let commit = repo.find_commit(oid)
-        .map_err(|e| format!("コミットが見つかりません: {}", e))?;
-    Ok(commit.parent_count() > 1)
-}
-
-/// git revert (CLI)
-/// no_commit=false: 取り消しコミットを新規作成
-/// no_commit=true: ワーキングツリーに変更を適用のみ（コミットしない）
-#[tauri::command]
-pub fn git_revert(path: String, hash: String, no_commit: bool) -> Result<String, String> {
-    validate_hash(&hash)?;
-
-    let is_merge = is_merge_commit(&path, &hash)?;
-
-    let mut args = vec!["revert".to_string()];
-    if no_commit {
-        args.push("--no-commit".to_string());
-    }
-    if is_merge {
-        args.push("-m".to_string());
-        args.push("1".to_string());
-    }
-    args.push(hash.clone());
-
-    let mut cmd = Command::new("git");
-    cmd.args(&args).current_dir(&path);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = cmd.output()
-        .map_err(|e| format!("git revert 実行失敗: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if output.status.success() {
-        if no_commit {
-            Ok("Revert 適用完了（コミットせず）".to_string())
-        } else {
-            Ok("Revert コミット作成完了".to_string())
-        }
-    } else {
-        // コンフリクト発生時は自動 abort して元の状態に戻す
-        if stdout.contains("CONFLICT") || stderr.contains("CONFLICT") || stderr.contains("conflict") {
-            let mut abort_cmd = Command::new("git");
-            abort_cmd.args(["revert", "--abort"]).current_dir(&path);
-            #[cfg(target_os = "windows")]
-            abort_cmd.creation_flags(0x08000000);
-            let _ = abort_cmd.output();
-            Err("コンフリクトが発生したため Revert を中断しました。手動で解決してください。".to_string())
-        } else {
-            Err(format!("Revert 失敗: {}", stderr))
-        }
-    }
-}
-
 /// git reset (CLI)
 /// mode: "hard" = 完全に戻す（変更破棄）, "soft" = HEAD移動のみ（変更をステージに維持）
 #[tauri::command]
@@ -1191,8 +1097,7 @@ pub fn git_reset(path: String, hash: String, mode: String) -> Result<String, Str
 
     let mut cmd = Command::new("git");
     cmd.args(["reset", reset_mode, &hash]).current_dir(&path);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    hide_console_window(&mut cmd);
     let output = cmd.output()
         .map_err(|e| format!("git reset 実行失敗: {}", e))?;
 

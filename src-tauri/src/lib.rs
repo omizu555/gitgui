@@ -98,7 +98,6 @@ pub fn run() {
             commands::git_ops::git_stash,
             commands::git_ops::git_stash_pop,
             commands::git_ops::git_stash_list,
-            commands::git_ops::git_log,
             commands::git_ops::git_log_graph,
             commands::git_ops::git_diff_file,
             commands::git_ops::git_commit_detail,
@@ -109,7 +108,6 @@ pub fn run() {
             commands::git_ops::open_url_in_browser,
             commands::git_ops::git_ahead_behind,
             commands::git_ops::git_log_search_by_file,
-            commands::git_ops::git_revert,
             commands::git_ops::git_reset,
             // ブランチ操作
             commands::branch::git_list_branches,

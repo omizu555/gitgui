@@ -6,7 +6,6 @@ import { open, ask } from "@tauri-apps/plugin-dialog";
 import { TabManager } from "./tabs";
 import type {
   RepoStatus,
-  CommitInfo,
   BranchInfo,
   StashEntry,
   DiffResult,
@@ -14,6 +13,7 @@ import type {
   GraphCommit,
   CommitDetail,
   AppSettings,
+  RecentProject,
 } from "./types";
 
 // =========================================
@@ -28,6 +28,18 @@ let isOperationRunning = false;
 let loadedLogCount = 0;
 const LOG_PAGE_SIZE = 200;
 let autoFetchTimerId: ReturnType<typeof setInterval> | null = null;
+
+// グラフ描画定数
+const GRAPH_COL_SPACING = 16;
+const GRAPH_ROW_HEIGHT = 32;
+
+// ファイルステータス → CSS クラスのマップ
+const STATUS_CLASS_MAP: Record<string, string> = {
+  M: "modified",
+  A: "added",
+  D: "deleted",
+  R: "renamed",
+};
 
 // =========================================
 //  DOM ヘルパー
@@ -88,7 +100,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 //  タブ切り替え時コールバック
 // =========================================
 
-(window as any).onTabSwitch = async (tab: { path: string }) => {
+// グローバル関数の型宣言
+declare global {
+  interface Window {
+    onTabSwitch: (tab: { path: string }) => Promise<void>;
+    loadRecentProjects: () => Promise<void>;
+  }
+}
+
+window.onTabSwitch = async (tab: { path: string }) => {
   selectedFiles.clear();
   lastClickedIndex = -1;
   await refreshAll(tab.path);
@@ -102,56 +122,53 @@ function setupToolbarEvents(): void {
   // ツールバーの右クリックメニュー抑制
   $("toolbar").addEventListener("contextmenu", (e) => e.preventDefault());
 
-  $("btn-fetch").addEventListener("click", async () => {
-    const path = tabManager.getActivePath();
-    if (!path) return;
-    setLoading(true, "Fetch 中...");
-    try {
-      await invoke("git_fetch", { path });
-      showToast("Fetch 完了", "success");
-      await refreshAll(path);
-      // 全タブの behind を確認してバッジ更新
-      await updateAllTabBehindBadges();
-    } catch (e) {
-      showToast("Fetch 失敗: " + e, "error");
-    } finally {
-      setLoading(false);
+  /** ツールバーボタンの共通ハンドラ: loading 表示→invoke→toast→refreshAll */
+  function toolbarOp(
+    btnId: string,
+    label: string,
+    command: string,
+    opts?: {
+      args?: Record<string, unknown>;
+      onResult?: (result: string) => void;
+      afterRefresh?: () => Promise<void>;
     }
+  ): void {
+    $(btnId).addEventListener("click", async () => {
+      const path = tabManager.getActivePath();
+      if (!path) return;
+      setLoading(true, `${label} 中...`);
+      try {
+        const result = await invoke<string>(command, { path, ...opts?.args });
+        if (opts?.onResult) {
+          opts.onResult(result);
+        } else {
+          showToast(`${label} 完了`, "success");
+        }
+        await refreshAll(path);
+        if (opts?.afterRefresh) await opts.afterRefresh();
+      } catch (e) {
+        showToast(`${label} 失敗: ` + e, "error");
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
+
+  toolbarOp("btn-fetch", "Fetch", "git_fetch", {
+    afterRefresh: updateAllTabBehindBadges,
   });
 
-  $("btn-pull").addEventListener("click", async () => {
-    const path = tabManager.getActivePath();
-    if (!path) return;
-    setLoading(true, "Pull 中...");
-    try {
-      const result = await invoke<string>("git_pull", { path });
+  toolbarOp("btn-pull", "Pull", "git_pull", {
+    onResult: (result) => {
       if (result.includes("コンフリクト")) {
         showToast(result, "warning");
       } else {
         showToast("Pull 完了", "success");
       }
-      await refreshAll(path);
-    } catch (e) {
-      showToast("Pull 失敗: " + e, "error");
-    } finally {
-      setLoading(false);
-    }
+    },
   });
 
-  $("btn-push").addEventListener("click", async () => {
-    const path = tabManager.getActivePath();
-    if (!path) return;
-    setLoading(true, "Push 中...");
-    try {
-      await invoke("git_push", { path });
-      showToast("Push 完了", "success");
-      await refreshAll(path);
-    } catch (e) {
-      showToast("Push 失敗: " + e, "error");
-    } finally {
-      setLoading(false);
-    }
-  });
+  toolbarOp("btn-push", "Push", "git_push");
 
   $("btn-explorer").addEventListener("click", async () => {
     const path = tabManager.getActivePath();
@@ -279,11 +296,9 @@ async function openFolderAndAdd(): Promise<void> {
 }
 
 /** 最近閉じたプロジェクトを読み込み */
-(window as any).loadRecentProjects = async () => {
+window.loadRecentProjects = async () => {
   try {
-    const recents = await invoke<
-      { name: string; path: string; branch: string }[]
-    >("list_recent_projects");
+    const recents = await invoke<RecentProject[]>("list_recent_projects");
     const section = $("recent-section");
     const list = $("recent-list");
     list.innerHTML = "";
@@ -392,12 +407,10 @@ async function appendMoreLogs(path: string): Promise<void> {
           if (l.to_col > maxCol) maxCol = l.to_col;
         });
       });
-      const colSpacing = 16;
-      const rowHeight = 32;
-      const svgWidth = Math.max(100, (maxCol + 2) * colSpacing);
+      const svgWidth = Math.max(100, (maxCol + 2) * GRAPH_COL_SPACING);
 
       newCommits.forEach((gc) => {
-        container.appendChild(createLogRow(gc, svgWidth, colSpacing, rowHeight));
+        container.appendChild(createLogRow(gc, svgWidth, GRAPH_COL_SPACING, GRAPH_ROW_HEIGHT));
       });
     }
   } catch (e) {
@@ -540,13 +553,7 @@ function createFileItem(file: DisplayFile, index: number): HTMLElement {
   el.dataset.index = String(index);
   el.dataset.path = file.path;
 
-  const statusClassMap: Record<string, string> = {
-    M: "modified",
-    A: "added",
-    D: "deleted",
-    R: "renamed",
-  };
-  const statusClass = statusClassMap[file.status] || "";
+  const statusClass = STATUS_CLASS_MAP[file.status] || "";
 
   el.innerHTML = `
     <span class="file-status-badge ${statusClass}">${escapeHtml(file.status)}</span>
@@ -1194,16 +1201,10 @@ async function showCommitDetail(hash: string): Promise<void> {
         '<div style="padding:12px;color:#666;text-align:center">変更ファイルなし</div>';
     } else {
       detail.changed_files.forEach((f) => {
-        const statusClassMap: Record<string, string> = {
-          M: "modified",
-          A: "added",
-          D: "deleted",
-          R: "renamed",
-        };
         const el = document.createElement("div");
         el.className = "cd-file-item";
         el.innerHTML = `
-          <span class="file-status-badge ${statusClassMap[f.status] || ""}">${escapeHtml(f.status)}</span>
+          <span class="file-status-badge ${STATUS_CLASS_MAP[f.status] || ""}">${escapeHtml(f.status)}</span>
           <span class="file-path">${escapeHtml(f.path)}</span>
         `;
         filesContainer.appendChild(el);
@@ -1361,9 +1362,7 @@ async function refreshLog(path: string): Promise<void> {
       });
     });
 
-    const colSpacing = 16;
-    const rowHeight = 32;
-    const svgWidth = Math.max(100, (maxCol + 2) * colSpacing);
+    const svgWidth = Math.max(100, (maxCol + 2) * GRAPH_COL_SPACING);
 
     // グラフカラムの幅を動的に変更
     const logHeader = document.querySelector<HTMLElement>(".log-header");
@@ -1372,7 +1371,7 @@ async function refreshLog(path: string): Promise<void> {
     }
 
     graphCommits.forEach((gc) => {
-      container.appendChild(createLogRow(gc, svgWidth, colSpacing, rowHeight));
+      container.appendChild(createLogRow(gc, svgWidth, GRAPH_COL_SPACING, GRAPH_ROW_HEIGHT));
     });
   } catch (e) {
     console.error("コミットログの取得に失敗:", e);
