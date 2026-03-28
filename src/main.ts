@@ -59,6 +59,7 @@ window.addEventListener("error", (e) => {
 
 document.addEventListener("DOMContentLoaded", async () => {
   tabManager = new TabManager();
+  tabManager.initDragListeners();
   await tabManager.loadProjects();
 
   setupToolbarEvents();

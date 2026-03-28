@@ -1,4 +1,6 @@
 use std::process::Command;
+use std::process::Stdio;
+use std::io::Read;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use crate::models::{RepoStatus, FileStatus, CommitInfo, CommitDetail, GraphCommit, GraphLine, StashEntry, DiffResult, DiffHunk, DiffLine};
@@ -122,13 +124,12 @@ pub fn git_clone(url: String, dest: String) -> Result<String, String> {
     }
 
     let mut cmd = Command::new("git");
-    cmd.args(["clone", &url]).current_dir(&dest);
+    cmd.args(["clone", "--progress", &url]).current_dir(&dest);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = cmd.output()
-        .map_err(|e| format!("git clone 実行失敗: {}", e))?;
+    let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
 
-    if output.status.success() {
+    if success {
         // クローン先のフルパスを返す
         let repo_name = url
             .trim_end_matches('/')
@@ -139,7 +140,6 @@ pub fn git_clone(url: String, dest: String) -> Result<String, String> {
         let cloned_path = dest_path.join(repo_name);
         Ok(cloned_path.to_string_lossy().to_string())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("Clone 失敗: {}", stderr))
     }
 }
@@ -148,16 +148,14 @@ pub fn git_clone(url: String, dest: String) -> Result<String, String> {
 #[tauri::command]
 pub fn git_fetch(path: String) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    cmd.args(["fetch", "--all"]).current_dir(&path);
+    cmd.args(["fetch", "--all", "--progress"]).current_dir(&path);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = cmd.output()
-        .map_err(|e| format!("git fetch 実行失敗: {}", e))?;
+    let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
 
-    if output.status.success() {
+    if success {
         Ok("Fetch 完了".to_string())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("Fetch 失敗: {}", stderr))
     }
 }
@@ -166,16 +164,12 @@ pub fn git_fetch(path: String) -> Result<String, String> {
 #[tauri::command]
 pub fn git_pull(path: String) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    cmd.args(["pull"]).current_dir(&path);
+    cmd.args(["pull", "--progress"]).current_dir(&path);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = cmd.output()
-        .map_err(|e| format!("git pull 実行失敗: {}", e))?;
+    let (success, stdout, stderr) = run_git_command(&mut cmd)?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if output.status.success() {
+    if success {
         if stdout.contains("CONFLICT") || stderr.contains("CONFLICT") {
             Ok("Pull 完了（コンフリクトあり）".to_string())
         } else {
@@ -190,16 +184,14 @@ pub fn git_pull(path: String) -> Result<String, String> {
 #[tauri::command]
 pub fn git_push(path: String) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    cmd.args(["push"]).current_dir(&path);
+    cmd.args(["push", "--progress"]).current_dir(&path);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = cmd.output()
-        .map_err(|e| format!("git push 実行失敗: {}", e))?;
+    let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
 
-    if output.status.success() {
+    if success {
         Ok("Push 完了".to_string())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("Push 失敗: {}", stderr))
     }
 }
@@ -939,6 +931,77 @@ pub fn git_log_search_by_file(path: String, pattern: String, count: Option<usize
 }
 
 // ===== ヘルパー関数 =====
+
+/// CLI git コマンドを安全に実行する共通ヘルパー。
+/// `Command::output()` は stdout/stderr をすべてメモリに蓄積するため、
+/// 大きなリポジトリ（30GB+ など）で git fetch/pull/clone すると
+/// stderr の進捗出力でパイプバッファが溢れてデッドロックしたり、
+/// 長時間ブロックされてフロントエンドがタイムアウトする。
+/// この関数は spawn + スレッドで stdout/stderr を並行読み取りし、
+/// バッファ溢れを防ぎつつ最後の出力のみを保持する（最大 64KB）。
+fn run_git_command(cmd: &mut Command) -> Result<(bool, String, String), String> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("git コマンド起動失敗: {}", e))?;
+
+    // stderr をバックグラウンドスレッドで読む（進捗出力がパイプを詰まらせるのを防ぐ）
+    let stderr_handle = child.stderr.take();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut output = String::new();
+        if let Some(mut stderr) = stderr_handle {
+            let mut buf = [0u8; 8192];
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let chunk = String::from_utf8_lossy(&buf[..n]);
+                        // 最後の 64KB のみ保持（巨大な進捗出力でメモリを食わない）
+                        output.push_str(&chunk);
+                        if output.len() > 65536 {
+                            let trim_at = output.len() - 65536;
+                            output = output[trim_at..].to_string();
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        output
+    });
+
+    // stdout もスレッドで読む
+    let stdout_handle = child.stdout.take();
+    let stdout_thread = std::thread::spawn(move || {
+        let mut output = String::new();
+        if let Some(mut stdout) = stdout_handle {
+            let mut buf = [0u8; 8192];
+            loop {
+                match stdout.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let chunk = String::from_utf8_lossy(&buf[..n]);
+                        output.push_str(&chunk);
+                        if output.len() > 65536 {
+                            let trim_at = output.len() - 65536;
+                            output = output[trim_at..].to_string();
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        output
+    });
+
+    let status = child.wait()
+        .map_err(|e| format!("git コマンド待機失敗: {}", e))?;
+
+    let stdout_str = stdout_thread.join().unwrap_or_default();
+    let stderr_str = stderr_thread.join().unwrap_or_default();
+
+    Ok((status.success(), stdout_str, stderr_str))
+}
 
 /// 未プル（リモートにのみ存在する）コミットのハッシュセットを構築
 fn build_unpulled_set(repo: &git2::Repository) -> std::collections::HashSet<String> {

@@ -25,8 +25,15 @@ export class TabManager {
 
   private tabBar: HTMLElement;
   private addBtn: HTMLElement;
-  private _dragTabId: string | null = null;
-  private _dragOverTabId: string | null = null;
+
+  // マウスベース D&D 状態
+  private _dragState: {
+    tabId: string;
+    el: HTMLElement;
+    startY: number;
+    isDragging: boolean;
+    placeholder: HTMLElement | null;
+  } | null = null;
 
   constructor() {
     this.tabBar = document.getElementById("tab-bar")!;
@@ -183,7 +190,6 @@ export class TabManager {
     const el = document.createElement("div");
     el.className = "tab" + (tab.id === this.activeTabId ? " active" : "");
     el.dataset.tabId = tab.id;
-    el.setAttribute("draggable", "true");
 
     // タブ名
     const nameSpan = document.createElement("span");
@@ -230,54 +236,107 @@ export class TabManager {
     });
     el.appendChild(closeBtn);
 
-    // クリックでタブ切り替え
-    el.addEventListener("click", () => this.switchTab(tab.id));
-
-    // === D&D: タブ並び替え ===
-    el.addEventListener("dragstart", (e) => {
-      this._dragTabId = tab.id;
-      el.classList.add("dragging");
-      e.dataTransfer!.effectAllowed = "move";
-      e.dataTransfer!.setData("text/plain", tab.id);
-    });
-
-    el.addEventListener("dragend", () => {
-      el.classList.remove("dragging");
-      this._dragTabId = null;
-      this._dragOverTabId = null;
-      this.tabBar
-        .querySelectorAll(".tab")
-        .forEach((t) => t.classList.remove("drag-over"));
+    // クリックでタブ切り替え（ドラッグ中はスキップ）
+    el.addEventListener("click", () => {
+      if (!this._dragState || !this._dragState.isDragging) {
+        this.switchTab(tab.id);
+      }
     });
 
     // 右クリックメニュー抑制
     el.addEventListener("contextmenu", (e) => e.preventDefault());
 
-    el.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      e.dataTransfer!.dropEffect = "move";
-      if (this._dragTabId && this._dragTabId !== tab.id) {
-        this._dragOverTabId = tab.id;
-        this.tabBar
-          .querySelectorAll(".tab")
-          .forEach((t) => t.classList.remove("drag-over"));
-        el.classList.add("drag-over");
-      }
-    });
+    // === マウスベース D&D: タブ並び替え ===
+    el.addEventListener("mousedown", (e) => {
+      // 閉じるボタン上では開始しない
+      if ((e.target as HTMLElement).classList.contains("tab-close")) return;
+      // 左ボタンのみ
+      if (e.button !== 0) return;
 
-    el.addEventListener("dragleave", () => {
-      el.classList.remove("drag-over");
-    });
-
-    el.addEventListener("drop", (e) => {
-      e.preventDefault();
-      el.classList.remove("drag-over");
-      if (this._dragTabId && this._dragTabId !== tab.id) {
-        this._reorderTabs(this._dragTabId, tab.id);
-      }
+      this._dragState = {
+        tabId: tab.id,
+        el,
+        startY: e.clientY,
+        isDragging: false,
+        placeholder: null,
+      };
     });
 
     return el;
+  }
+
+  /** マウスベース D&D のグローバルイベントを初期化 */
+  initDragListeners(): void {
+    document.addEventListener("mousemove", (e) => this._onMouseMove(e));
+    document.addEventListener("mouseup", () => this._onMouseUp());
+  }
+
+  private _onMouseMove(e: MouseEvent): void {
+    if (!this._dragState) return;
+
+    const dy = Math.abs(e.clientY - this._dragState.startY);
+
+    // 5px 以上動いたらドラッグ開始
+    if (!this._dragState.isDragging) {
+      if (dy < 5) return;
+      this._dragState.isDragging = true;
+      this._dragState.el.classList.add("dragging");
+      document.body.style.cursor = "grabbing";
+      document.body.style.userSelect = "none";
+    }
+
+    // ドラッグ中: マウス位置からドロップ先タブを判定
+    const tabEls = this.tabBar.querySelectorAll<HTMLElement>(".tab:not(.dragging)");
+    let targetEl: HTMLElement | null = null;
+
+    for (const t of tabEls) {
+      const rect = t.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      if (e.clientY < midY) {
+        targetEl = t;
+        break;
+      }
+    }
+
+    // ドロップインジケーター更新
+    this.tabBar.querySelectorAll(".tab").forEach((t) => t.classList.remove("drag-over"));
+    if (targetEl) {
+      targetEl.classList.add("drag-over");
+    }
+  }
+
+  private _onMouseUp(): void {
+    if (!this._dragState) return;
+
+    if (this._dragState.isDragging) {
+      // ドロップ先を確定
+      const tabEls = this.tabBar.querySelectorAll<HTMLElement>(".tab:not(.dragging)");
+      const draggedEl = this._dragState.el;
+      const draggedRect = draggedEl.getBoundingClientRect();
+      const draggedMidY = draggedRect.top + draggedRect.height / 2;
+
+      let targetId: string | null = null;
+
+      // マウスの位置ではなく、ドラッグ中の要素の位置とインジケーターで判定
+      for (const t of tabEls) {
+        if (t.classList.contains("drag-over")) {
+          targetId = t.dataset.tabId || null;
+          break;
+        }
+      }
+
+      // クリーンアップ
+      this._dragState.el.classList.remove("dragging");
+      this.tabBar.querySelectorAll(".tab").forEach((t) => t.classList.remove("drag-over"));
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+
+      if (targetId && targetId !== this._dragState.tabId) {
+        this._reorderTabs(this._dragState.tabId, targetId);
+      }
+    }
+
+    this._dragState = null;
   }
 
   /** D&D によるタブ並び替え */
@@ -290,7 +349,10 @@ export class TabManager {
     if (dragIdx === -1 || targetIdx === -1) return;
 
     const [moved] = this.tabs.splice(dragIdx, 1);
-    this.tabs.splice(targetIdx, 0, moved);
+    // dragIdx < targetIdx の場合、splice でインデックスが 1 ずれるので補正する
+    // これにより常に「ターゲットの前」に挿入され、border-top の視覚表示と一致する
+    const insertIdx = dragIdx < targetIdx ? targetIdx - 1 : targetIdx;
+    this.tabs.splice(insertIdx, 0, moved);
     this.tabs.forEach((t, i) => (t.order = i));
 
     this.render();
