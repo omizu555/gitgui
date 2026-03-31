@@ -506,6 +506,23 @@ body {
 }
 .branch-dropdown .dd-new:hover { background: #094771; }
 
+/* ===== ブランチ削除ボタン ===== */
+.branch-dropdown .dd-delete-btn {
+  opacity: 0;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: opacity 0.15s;
+}
+.branch-dropdown .dd-item:hover .dd-delete-btn {
+  opacity: 0.7;
+}
+.branch-dropdown .dd-delete-btn:hover {
+  opacity: 1 !important;
+  background: #5a1d1d;
+}
+
 /* ===== Stash ドロップダウン ===== */
 .stash-dropdown {
   display: none;
@@ -1240,6 +1257,23 @@ body {
   text-align: center;
 }
 .tab-update-badge.has-updates {
+  display: inline-block;
+}
+
+/* ===== タブPush待ちバッジ ===== */
+.tab-ahead-badge {
+  display: none;
+  background: #c586c0;
+  color: #fff;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  margin-left: 2px;
+  white-space: nowrap;
+  min-width: 16px;
+  text-align: center;
+}
+.tab-ahead-badge.has-ahead {
   display: inline-block;
 }
 

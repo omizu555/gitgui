@@ -438,7 +438,7 @@ Phase 1.1 (Tauri セットアップ)
                  ├─→ Phase 3.2 (コミットログ + 検索) ─→ Phase 3.3 (コミットグラフ)
                  └─→ Phase 3.4 (ブランチ一覧)
 
-全フェーズ完了 ─→ Phase 4 (仕上げ) ─→ Phase 5 (バグ修正) ─→ Phase 6 (追加改善) ─→ Phase 7 (追加改善2)
+全フェーズ完了 ─→ Phase 4 (仕上げ) ─→ Phase 5 (バグ修正) ─→ Phase 6 (追加改善) ─→ Phase 7 (追加改善2) ─→ Phase 8 (UX改善)
 ```
 
 ---
@@ -499,18 +499,84 @@ Phase 1.1 (Tauri セットアップ)
 
 ---
 
+## Phase 8: UX改善（操作安全性・機能対称性 2026-03-31）✅ 実装済み
+
+### 8.1: タブに ↑N Push 待ち表示（実装済み ✅）
+
+| # | タスク | ファイル | 状態 |
+|---|---|---|---|
+| 8.1-1 | `TabData` に `ahead: number` フィールドを追加 | `src/tabs.ts` | ✅ |
+| 8.1-2 | `_createTabElement()` に `tab-ahead-badge` の `<span>` 追加 | `src/tabs.ts` | ✅ |
+| 8.1-3 | `updateTabAhead(tabId, ahead)` メソッドを追加 | `src/tabs.ts` | ✅ |
+| 8.1-4 | `refreshStatus()` で `updateTabAhead()` を呼び出し | `src/main.ts` | ✅ |
+| 8.1-5 | `updateAllTabBehindBadges()` で ahead も同時更新 | `src/main.ts` | ✅ |
+| 8.1-6 | `.tab-ahead-badge` CSS スタイル追加（紫 `#c586c0`） | `src/styles.css` | ✅ |
+
+### 8.2: タブ閉じる確認ダイアログ（実装済み ✅）
+
+| # | タスク | ファイル | 状態 |
+|---|---|---|---|
+| 8.2-1 | `removeTab()` で `changedFiles > 0 \|\| ahead > 0` を検査 | `src/tabs.ts` | ✅ |
+| 8.2-2 | `@tauri-apps/plugin-dialog` の `ask()` で確認ダイアログ表示 | `src/tabs.ts` | ✅ |
+| 8.2-3 | キャンセル時は `return` で何もしない | `src/tabs.ts` | ✅ |
+
+### 8.3: Unstage All ボタン（実装済み ✅）
+
+| # | タスク | ファイル | 状態 |
+|---|---|---|---|
+| 8.3-1 | `git_unstage_all` Rust コマンド追加（`reset --mixed HEAD`） | `src-tauri/src/commands/git_ops.rs` | ✅ |
+| 8.3-2 | `lib.rs` にコマンド登録 | `src-tauri/src/lib.rs` | ✅ |
+| 8.3-3 | Unstage All ボタンを Stage All の横に追加 | `src/index.html` | ✅ |
+| 8.3-4 | Unstage All のクリックハンドラ追加 | `src/main.ts` | ✅ |
+
+### 8.4: ブランチ削除 + git gc 最適化（実装済み ✅）
+
+| # | タスク | ファイル | 状態 |
+|---|---|---|---|
+| 8.4-1 | `git_delete_branch` Rust コマンド追加（マージチェック・force対応） | `src-tauri/src/commands/branch.rs` | ✅ |
+| 8.4-2 | `git_gc` Rust コマンド追加（`git gc --auto`） | `src-tauri/src/commands/git_ops.rs` | ✅ |
+| 8.4-3 | `lib.rs` に `git_delete_branch`, `git_gc` 登録 | `src-tauri/src/lib.rs` | ✅ |
+| 8.4-4 | ブランチ一覧に 🗑️ 削除ボタン追加（ホバー表示） | `src/main.ts` | ✅ |
+| 8.4-5 | 未マージ時の確認ダイアログ + force 再試行 | `src/main.ts` | ✅ |
+| 8.4-6 | 削除成功後に `git_gc` 呼び出し | `src/main.ts` | ✅ |
+| 8.4-7 | `.dd-delete-btn` CSS スタイル追加 | `src/styles.css` | ✅ |
+
+---
+
+## Phase 8 タスクサマリー
+
+| カテゴリ | タスク数 | 状態 |
+|---|---|---|
+| 8.1 タブ ↑N Push待ち表示 | 6 | ✅ 完了 |
+| 8.2 タブ閉じる確認ダイアログ | 3 | ✅ 完了 |
+| 8.3 Unstage All | 4 | ✅ 完了 |
+| 8.4 ブランチ削除 + gc | 7 | ✅ 完了 |
+| **合計** | **20** | **✅ 全完了** |
+
+## Phase 8 実装順序
+
+```
+8.1 (↑N Push待ち表示) ← tabs.ts にデータ追加が先
+  └─→ 8.2 (タブ閉じ確認) ← 8.1 の ahead データを利用
+8.3 (Unstage All) ← 独立して実施可能
+8.4 (ブランチ削除 + gc) ← 独立して実施可能
+```
+
+---
+
 ## タスクサマリー（全体）
 
-| フェーズ | タスク数 | 推定時間 |
+| フェーズ | タスク数 | 状態 |
 |---|---|---|
-| Phase 1: プロジェクト基盤 | 30 | 約 6.5 時間 |
-| Phase 2: Git 基本操作 | 50 | 約 10 時間 |
-| Phase 3: 情報表示 | 22 | 約 6 時間 |
-| Phase 4: 仕上げ・品質向上 | 12 | 約 3 時間 |
-| Phase 5: バグ修正・改善 | 23 | 約 2 時間 |
-| Phase 6: 追加改善 | 21 | 約 2.5 時間 |
-| Phase 7: 追加改善2 | 18 | 約 1.75 時間 |
-| **合計** | **176** | **約 31.75 時間** |
+| Phase 1: プロジェクト基盤 | 30 | ✅ 完了 |
+| Phase 2: Git 基本操作 | 50 | ✅ 完了 |
+| Phase 3: 情報表示 | 22 | ✅ 完了 |
+| Phase 4: 仕上げ・品質向上 | 12 | ✅ 完了 |
+| Phase 5: バグ修正・改善 | 23 | ✅ 完了 |
+| Phase 6: 追加改善 | 21 | ✅ 完了 |
+| Phase 7: 追加改善2 | 18 | ⬜ 未着手 |
+| Phase 8: UX改善 | 20 | ✅ 完了 |
+| **合計** | **196** | |
 
 ---
 

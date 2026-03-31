@@ -757,3 +757,150 @@ function setupDragAndDrop(): void {
   ├─→ 7.1B (コミットログ未プル表示) ← バックエンド + フロントエンド連携
   └─→ 7.2 (設定ダイアログ) ← 新規モーダル + 永続化 + タイマー
 ```
+
+---
+
+## Phase 8: UX 改善（操作安全性・機能対称性 2026-03-31）
+
+> ユーザー操作観点でのレビューに基づく改善。「サラリーマンプログラマーがファイル管理として使う」シナリオで不足していた機能を追加。
+
+### ユーザーからのフィードバック
+
+1. **Push 忘れ防止** — タブバッジに `↓N`（未プル）はあるが、`↑N`（未Push）がない。コミットだけして Push を忘れる事故が最多
+2. **タブ誤閉じ防止** — タブの × で即座にプロジェクト削除される。未コミット変更や未Push コミットがあっても確認なし
+3. **Unstage All がない** — Stage All はあるのに対になる操作がない。間違えて全ステージした場合に不便
+4. **ブランチ削除ができない** — 作成・切替はあるが削除がない。feature ブランチが増え続ける。削除後に `git gc --auto` で最適化も実施
+
+---
+
+### 8.1: タブに Push 待ちコミット数（↑N）を表示 【UX改善・高優先】
+
+**現状の問題:**
+- `RepoStatus.ahead` は既に取得・ステータスバーに表示されているが、タブバッジとしては表示されていない
+- コミット後にタブを切り替えると Push 忘れに気付けない
+
+**実装方針:**
+
+1. **`tabs.ts`:**
+   - `TabData` に `ahead: number` フィールドを追加
+   - `_createTabElement()` に `tab-ahead-badge` の `<span>` を追加（紫色 `#c586c0`）
+   - 新メソッド `updateTabAhead(tabId, ahead)` を追加
+
+2. **`main.ts`:**
+   - `refreshStatus()` で `tabManager.updateTabAhead()` を呼び出し
+   - `updateAllTabBehindBadges()` で ahead も同時に取得・更新
+
+3. **`styles.css`:**
+   - `.tab-ahead-badge` / `.tab-ahead-badge.has-ahead` スタイル追加
+
+**変更ファイル:** `src/tabs.ts`, `src/main.ts`, `src/styles.css`
+
+---
+
+### 8.2: タブ閉じる時の確認ダイアログ 【安全性・高優先】
+
+**現状の問題:**
+- タブの × クリックで `removeTab()` → `invoke("remove_project")` が即座に実行される
+- 未コミット変更がある状態でも確認なしにプロジェクトが消える（recent には行くが気付きにくい）
+
+**実装方針:**
+
+1. **`tabs.ts`:**
+   - `removeTab()` で `tab.changedFiles > 0 || tab.ahead > 0` を検査
+   - 条件に該当する場合、`@tauri-apps/plugin-dialog` の `ask()` で確認ダイアログを表示
+   - メッセージ例:「未コミットの変更が 3 ファイルあります。\n未プッシュのコミットが 2 件あります。\nこのタブを閉じますか？」
+   - キャンセル時は `return` で何もしない
+
+**変更ファイル:** `src/tabs.ts`
+
+---
+
+### 8.3: Unstage All ボタン 【機能対称性・中優先】
+
+**現状の問題:**
+- Stage All ボタンはコミットエリアにあるが、対になる Unstage All がない
+- 間違えて全ステージした場合、ファイルを一つずつ右クリック → Unstage するしかない
+
+**実装方針:**
+
+1. **Rust 側 (`git_ops.rs`):**
+   - 新コマンド `git_unstage_all(path: String)` を追加
+   - `repo.reset(head_tree.as_object(), ResetType::Mixed, None)` で HEAD のツリーにインデックスをリセット
+
+2. **HTML (`index.html`):**
+   - Stage All と Commit の間に `Unstage All` ボタンを追加
+
+3. **JS (`main.ts`):**
+   - `setupCommitArea()` に Unstage All のクリックハンドラを追加
+
+4. **`lib.rs`:**
+   - `git_unstage_all` コマンドを登録
+
+**変更ファイル:** `src-tauri/src/commands/git_ops.rs`, `src-tauri/src/lib.rs`, `src/index.html`, `src/main.ts`
+
+---
+
+### 8.4: ブランチ削除 + git gc 最適化 【機能補完・中優先】
+
+**現状の問題:**
+- ブランチの作成・切替はできるが削除ができない
+- 長期間使うと不要な feature ブランチが蓄積する
+
+**実装方針:**
+
+1. **Rust 側 (`branch.rs`):**
+   - 新コマンド `git_delete_branch(path, branch_name, force)` を追加
+   - 現在チェックアウト中のブランチの削除は拒否
+   - `force: false` の場合、マージ済みかチェック。未マージならエラーを返す
+   - `force: true` の場合、強制削除
+
+2. **Rust 側 (`git_ops.rs`):**
+   - 新コマンド `git_gc(path)` を追加
+   - `git gc --auto` を CLI で実行（必要な場合のみ自動最適化）
+
+3. **JS (`main.ts`):**
+   - `loadBranches()` のブランチ一覧各行に 🗑️ 削除ボタンを追加（ホバーで表示）
+   - 現在のブランチには削除ボタンを表示しない
+   - 削除時: まず `force: false` で試行 → 未マージエラー時は確認ダイアログ → `force: true` で再試行
+   - 削除成功後に `git_gc` を呼び出し
+
+4. **CSS (`styles.css`):**
+   - `.dd-delete-btn` スタイル追加（ホバーで opacity 表示）
+
+5. **`lib.rs`:**
+   - `git_delete_branch`, `git_gc` コマンドを登録
+
+**変更ファイル:** `src-tauri/src/commands/branch.rs`, `src-tauri/src/commands/git_ops.rs`, `src-tauri/src/lib.rs`, `src/main.ts`, `src/styles.css`
+
+---
+
+### Phase 8 サマリー
+
+| カテゴリ | 推定変更ファイル数 | 依存関係 |
+|---|---|---|
+| 8.1 タブ ↑N Push待ち表示 | 3 | なし |
+| 8.2 タブ閉じる確認ダイアログ | 1 | 8.1（ahead データが必要） |
+| 8.3 Unstage All | 4 | なし |
+| 8.4 ブランチ削除 + gc | 5 | なし |
+
+### Phase 8 実装順序
+
+```
+8.1 (↑N Push待ち表示) ← tabs.ts にデータ追加が先
+  └─→ 8.2 (タブ閉じ確認) ← 8.1 の ahead データを利用
+8.3 (Unstage All) ← 独立して実施可能
+8.4 (ブランチ削除 + gc) ← 独立して実施可能
+```
+
+---
+
+### Rust バックエンド コマンド設計（Phase 8 追加分）
+
+```rust
+// === Git 操作（追加） ===
+#[tauri::command] fn git_unstage_all(path: String) -> Result<(), String>
+#[tauri::command] fn git_gc(path: String) -> Result<String, String>
+
+// === ブランチ操作（追加） ===
+#[tauri::command] fn git_delete_branch(path: String, branch_name: String, force: bool) -> Result<String, String>
+```

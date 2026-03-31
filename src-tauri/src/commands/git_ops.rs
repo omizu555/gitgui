@@ -264,6 +264,22 @@ pub fn git_unstage_files(path: String, files: Vec<String>) -> Result<(), String>
     Ok(())
 }
 
+/// 全ファイルをアンステージ
+#[tauri::command]
+pub fn git_unstage_all(path: String) -> Result<(), String> {
+    let repo = git2::Repository::open(&path)
+        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+
+    let head = repo.head().map_err(|e| e.to_string())?;
+    let head_commit = head.peel_to_commit().map_err(|e| e.to_string())?;
+    let head_tree = head_commit.tree().map_err(|e| e.to_string())?;
+
+    repo.reset(head_tree.as_object(), git2::ResetType::Mixed, None)
+        .map_err(|e| format!("Unstage All 失敗: {}", e))?;
+
+    Ok(())
+}
+
 /// 全ファイルをステージング
 #[tauri::command]
 pub fn git_stage_all(path: String) -> Result<(), String> {
@@ -1110,5 +1126,22 @@ pub fn git_reset(path: String, hash: String, mode: String) -> Result<String, Str
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("Reset 失敗: {}", stderr))
+    }
+}
+
+/// git gc --auto（不要オブジェクトの最適化）
+#[tauri::command]
+pub fn git_gc(path: String) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(["gc", "--auto"]).current_dir(&path);
+    hide_console_window(&mut cmd);
+    let output = cmd.output()
+        .map_err(|e| format!("git gc 実行失敗: {}", e))?;
+
+    if output.status.success() {
+        Ok("最適化完了".to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("最適化失敗: {}", stderr))
     }
 }

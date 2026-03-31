@@ -349,6 +349,18 @@ function setupCommitArea(): void {
     }
   });
 
+  $("btn-unstage-all").addEventListener("click", async () => {
+    const path = tabManager.getActivePath();
+    if (!path) return;
+    try {
+      await invoke("git_unstage_all", { path });
+      showToast("全ファイルをアンステージしました", "success");
+      await refreshStatus(path);
+    } catch (e) {
+      showToast("Unstage All 失敗: " + e, "error");
+    }
+  });
+
   $("btn-commit").addEventListener("click", () => doCommit());
 
   $<HTMLInputElement>("amend-check").addEventListener("change", async (e) => {
@@ -504,6 +516,7 @@ async function refreshStatus(path: string): Promise<void> {
     // アクティブタブのバッジを更新
     if (tabManager.activeTabId) {
       tabManager.updateTabBehind(tabManager.activeTabId, status.behind);
+      tabManager.updateTabAhead(tabManager.activeTabId, status.ahead);
       tabManager.updateTabChanges(tabManager.activeTabId, currentFiles.length);
     }
   } catch (e) {
@@ -878,7 +891,26 @@ async function loadBranches(): Promise<void> {
     branches.forEach((b) => {
       const item = document.createElement("div");
       item.className = "dd-item" + (b.is_current ? " current" : "");
-      item.textContent = (b.is_current ? "✓ " : "  ") + b.name;
+
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = (b.is_current ? "✓ " : "  ") + b.name;
+      nameSpan.style.flex = "1";
+      item.appendChild(nameSpan);
+
+      // ローカルブランチかつ現在のブランチでなければ削除ボタン表示
+      if (!b.is_remote && !b.is_current) {
+        const delBtn = document.createElement("span");
+        delBtn.className = "dd-delete-btn";
+        delBtn.textContent = "🗑️";
+        delBtn.title = "ブランチを削除";
+        delBtn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          $("branch-dropdown").classList.remove("visible");
+          await deleteBranch(b.name);
+        });
+        item.appendChild(delBtn);
+      }
+
       item.addEventListener("click", async (e) => {
         e.stopPropagation();
         $("branch-dropdown").classList.remove("visible");
@@ -954,6 +986,46 @@ async function createBranch(): Promise<void> {
   } catch (e) {
     showToast("ブランチ作成失敗: " + e, "error");
   }
+}
+
+async function deleteBranch(name: string): Promise<void> {
+  const path = tabManager.getActivePath();
+  if (!path) return;
+
+  let force = false;
+  try {
+    await invoke("git_delete_branch", { path, branchName: name, force: false });
+  } catch (e: unknown) {
+    const errMsg = String(e);
+    if (errMsg.includes("マージされていません")) {
+      const confirmed = await confirmDialog(
+        "未マージブランチの削除",
+        `ブランチ '${name}' はマージされていません。強制削除しますか？`
+      );
+      if (!confirmed) return;
+      force = true;
+      try {
+        await invoke("git_delete_branch", { path, branchName: name, force: true });
+      } catch (e2) {
+        showToast("ブランチ削除失敗: " + e2, "error");
+        return;
+      }
+    } else {
+      showToast("ブランチ削除失敗: " + e, "error");
+      return;
+    }
+  }
+
+  showToast(`ブランチ '${name}' を削除しました`, "success");
+
+  // 削除後に git gc --auto で最適化
+  try {
+    await invoke("git_gc", { path });
+  } catch {
+    // gc 失敗はサイレント
+  }
+
+  await refreshAll(path);
 }
 
 // =========================================
@@ -1559,12 +1631,14 @@ async function filterLogByFile(rawQuery: string): Promise<void> {
 async function updateAllTabBehindBadges(): Promise<void> {
   for (const tab of tabManager.tabs) {
     try {
-      const [, behind] = await invoke<[number, number]>("git_ahead_behind", {
+      const [ahead, behind] = await invoke<[number, number]>("git_ahead_behind", {
         path: tab.path,
       });
       tabManager.updateTabBehind(tab.id, behind);
+      tabManager.updateTabAhead(tab.id, ahead);
     } catch {
       tabManager.updateTabBehind(tab.id, 0);
+      tabManager.updateTabAhead(tab.id, 0);
     }
     // 非アクティブタブの変更ファイル数も更新
     if (tab.id !== tabManager.activeTabId) {

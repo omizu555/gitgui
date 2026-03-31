@@ -141,3 +141,57 @@ pub fn git_create_branch(path: String, branch_name: String, checkout: bool) -> R
 
     Ok(format!("ブランチ '{}' を作成しました", branch_name))
 }
+
+/// ブランチ削除
+#[tauri::command]
+pub fn git_delete_branch(path: String, branch_name: String, force: bool) -> Result<String, String> {
+    let repo = git2::Repository::open(&path)
+        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+
+    // 現在のブランチは削除不可
+    let current_branch = repo
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    if branch_name == current_branch {
+        return Err("現在チェックアウト中のブランチは削除できません".to_string());
+    }
+
+    let mut branch = repo
+        .find_branch(&branch_name, git2::BranchType::Local)
+        .map_err(|e| format!("ブランチ '{}' が見つかりません: {}", branch_name, e))?;
+
+    if force {
+        branch.delete()
+            .map_err(|e| format!("ブランチ削除失敗: {}", e))?;
+    } else {
+        // マージ済みかチェック
+        if !branch.is_head() {
+            let branch_commit = branch.get().peel_to_commit()
+                .map_err(|e| format!("コミット取得失敗: {}", e))?;
+            let head_commit = repo.head()
+                .map_err(|e| e.to_string())?
+                .peel_to_commit()
+                .map_err(|e| e.to_string())?;
+
+            let merge_base = repo.merge_base(branch_commit.id(), head_commit.id());
+            let is_merged = match merge_base {
+                Ok(base) => base == branch_commit.id(),
+                Err(_) => false,
+            };
+
+            if !is_merged {
+                return Err(format!(
+                    "ブランチ '{}' はマージされていません。強制削除する場合は確認してください。",
+                    branch_name
+                ));
+            }
+        }
+        branch.delete()
+            .map_err(|e| format!("ブランチ削除失敗: {}", e))?;
+    }
+
+    Ok(format!("ブランチ '{}' を削除しました", branch_name))
+}

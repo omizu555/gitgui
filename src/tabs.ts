@@ -9,6 +9,7 @@ interface TabData {
   name: string;
   path: string;
   order: number;
+  ahead: number;
   behind: number;
   changedFiles: number;
 }
@@ -55,6 +56,7 @@ export class TabManager {
         name: p.name,
         path: p.path,
         order: p.order,
+        ahead: 0,
         behind: 0,
         changedFiles: 0,
       }));
@@ -84,6 +86,7 @@ export class TabManager {
       name: project.name,
       path: project.path,
       order: project.order,
+      ahead: 0,
       behind: 0,
       changedFiles: 0,
     });
@@ -92,9 +95,24 @@ export class TabManager {
     return project;
   }
 
-  /** タブを閉じる（プロジェクト削除） */
+  /** タブを閉じる（プロジェクト削除） — 未コミット変更がある場合は確認 */
   async removeTab(id: string): Promise<void> {
     try {
+      const tab = this.tabs.find((t) => t.id === id);
+      if (tab) {
+        // 変更ファイルがあるか確認
+        const hasChanges = tab.changedFiles > 0 || tab.ahead > 0;
+        if (hasChanges) {
+          const { ask } = await import("@tauri-apps/plugin-dialog");
+          let msg = "";
+          if (tab.changedFiles > 0) msg += `未コミットの変更が ${tab.changedFiles} ファイルあります。`;
+          if (tab.ahead > 0) msg += `${msg ? "\n" : ""}未プッシュのコミットが ${tab.ahead} 件あります。`;
+          msg += "\nこのタブを閉じますか？";
+          const confirmed = await ask(msg, { title: "タブを閉じる", kind: "warning" });
+          if (!confirmed) return;
+        }
+      }
+
       await invoke("remove_project", { id });
       this.tabs = this.tabs.filter((t) => t.id !== id);
       this.render();
@@ -214,6 +232,16 @@ export class TabManager {
       changesBadge.classList.add("has-changes");
     }
     el.appendChild(changesBadge);
+
+    // Push待ちバッジ（ahead 数）— メモリの値で初期化
+    const aheadBadge = document.createElement("span");
+    aheadBadge.className = "tab-ahead-badge";
+    aheadBadge.id = `tab-ahead-${tab.id}`;
+    if (tab.ahead > 0) {
+      aheadBadge.textContent = `↑${tab.ahead}`;
+      aheadBadge.classList.add("has-ahead");
+    }
+    el.appendChild(aheadBadge);
 
     // 更新バッジ（behind 数）— メモリの値で初期化
     const updateBadge = document.createElement("span");
@@ -404,6 +432,23 @@ export class TabManager {
       } else {
         badge.textContent = "";
         badge.classList.remove("has-updates");
+      }
+    }
+  }
+
+  /** タブのPush待ちバッジ（ahead 数）を更新 */
+  updateTabAhead(tabId: string, ahead: number): void {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    if (tab) tab.ahead = ahead;
+
+    const badge = document.getElementById(`tab-ahead-${tabId}`);
+    if (badge) {
+      if (ahead > 0) {
+        badge.textContent = `↑${ahead}`;
+        badge.classList.add("has-ahead");
+      } else {
+        badge.textContent = "";
+        badge.classList.remove("has-ahead");
       }
     }
   }
