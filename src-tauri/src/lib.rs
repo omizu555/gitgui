@@ -23,6 +23,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::new())
+        .manage(commands::locks::RepoLocks::default())
+        .manage(commands::locks::RunningOps::default())
         .setup(|app| {
             // --- システムトレイ ---
             let show = MenuItem::with_id(app, "show", "表示", true, None::<&str>)?;
@@ -111,6 +113,7 @@ pub fn run() {
             commands::git_ops::git_reset,
             commands::git_ops::git_gc,
             commands::git_ops::git_unstage_all,
+            commands::git_ops::git_cancel,
             // ブランチ操作
             commands::branch::git_list_branches,
             commands::branch::git_checkout_branch,

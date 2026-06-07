@@ -1,11 +1,13 @@
 use std::process::Command;
 use std::process::Stdio;
 use std::io::Read;
+use tauri::{Emitter, Manager};
+use crate::commands::locks::{RepoLocks, RunningOps};
 use crate::models::{RepoStatus, FileStatus, CommitInfo, CommitDetail, GraphCommit, GraphLine, StashEntry, DiffResult, DiffHunk, DiffLine};
 
 /// Windows でコンソールウィンドウを表示せずにプロセスを起動するためのフラグを設定する。
 /// macOS / Linux ではなにもしない。
-fn hide_console_window(cmd: &mut Command) {
+pub(crate) fn hide_console_window(cmd: &mut Command) {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -15,8 +17,13 @@ fn hide_console_window(cmd: &mut Command) {
 
 /// git status 取得
 #[tauri::command]
-pub fn git_status(path: String) -> Result<RepoStatus, String> {
-    let repo = git2::Repository::open(&path)
+pub async fn git_status(path: String) -> Result<RepoStatus, String> {
+    // 数万ファイルのリポジトリでは statuses() が秒単位かかるためワーカースレッドで実行
+    run_blocking(move || git_status_blocking(&path)).await
+}
+
+fn git_status_blocking(path: &str) -> Result<RepoStatus, String> {
+    let repo = git2::Repository::open(path)
         .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
     let branch = repo
@@ -123,28 +130,69 @@ fn get_ahead_behind(repo: &git2::Repository) -> Result<(usize, usize), git2::Err
 /// git clone (CLI)
 /// dest は保存先の「親フォルダ」。git が URL から導出したサブフォルダにクローンする。
 #[tauri::command]
-pub fn git_clone(url: String, dest: String) -> Result<String, String> {
+pub async fn git_clone(
+    url: String,
+    dest: String,
+    shallow: Option<bool>,
+    op_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    run_blocking(move || {
+        clone_blocking(&url, &dest, shallow.unwrap_or(false), op_id.as_deref(), &app)
+    })
+    .await
+}
+
+fn clone_blocking(
+    url: &str,
+    dest: &str,
+    shallow: bool,
+    op_id: Option<&str>,
+    app: &tauri::AppHandle,
+) -> Result<String, String> {
     // dest フォルダの存在確認
-    let dest_path = std::path::Path::new(&dest);
+    let dest_path = std::path::Path::new(dest);
     if !dest_path.exists() {
         std::fs::create_dir_all(dest_path)
             .map_err(|e| format!("保存先フォルダの作成に失敗: {}", e))?;
     }
 
+    // クローン先のフルパス（キャンセル時のクリーンアップ判定にも使う）
+    let repo_name = url
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("repo")
+        .trim_end_matches(".git");
+    let cloned_path = dest_path.join(repo_name);
+    let existed_before = cloned_path.exists();
+
     let mut cmd = Command::new("git");
-    cmd.args(["clone", "--progress", &url]).current_dir(&dest);
+    cmd.args(["clone", "--progress"]);
+    // core.longpaths: Windows の 260 文字パス制限対策。
+    // clone の -c は新規リポジトリの設定に書き込まれるため、以後の checkout でも有効
+    // （Windows 以外では無視され無害）
+    cmd.args(["-c", "core.longpaths=true"]);
+    if shallow {
+        // 履歴を浅く取得。--no-single-branch で全ブランチの先端は取得し、
+        // クローン後のブランチ切り替えを可能に保つ
+        cmd.args(["--depth", "1", "--no-single-branch"]);
+    }
+    cmd.arg(url).current_dir(dest);
+    // 認証プロンプトを出せない環境で無限ハングせず即エラーにする
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
     hide_console_window(&mut cmd);
-    let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
+    let (success, _stdout, stderr) = run_git_command_with_progress(&mut cmd, Some(app), "clone", op_id)?;
+
+    if was_cancelled(app, op_id) {
+        // 部分的にクローンされたフォルダをベストエフォートで削除
+        if !existed_before {
+            remove_dir_all_force(&cloned_path);
+        }
+        return Err("クローンをキャンセルしました".to_string());
+    }
 
     if success {
-        // クローン先のフルパスを返す
-        let repo_name = url
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or("repo")
-            .trim_end_matches(".git");
-        let cloned_path = dest_path.join(repo_name);
         Ok(cloned_path.to_string_lossy().to_string())
     } else {
         Err(format!("Clone 失敗: {}", stderr))
@@ -152,79 +200,154 @@ pub fn git_clone(url: String, dest: String) -> Result<String, String> {
 }
 
 /// git fetch (CLI)
+/// silent=true は自動フェッチ用: 他の操作が実行中ならロック待ちせず "BUSY" で即返す
 #[tauri::command]
-pub fn git_fetch(path: String) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["fetch", "--all", "--progress"]).current_dir(&path);
-    hide_console_window(&mut cmd);
-    let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
-
-    if success {
-        Ok("Fetch 完了".to_string())
+pub async fn git_fetch(
+    path: String,
+    silent: Option<bool>,
+    op_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let is_silent = silent.unwrap_or(false);
+    let lock = app.state::<RepoLocks>().lock_for(&path);
+    let _guard = if is_silent {
+        match lock.try_lock_owned() {
+            Ok(g) => g,
+            Err(_) => return Err("BUSY".to_string()),
+        }
     } else {
-        Err(format!("Fetch 失敗: {}", stderr))
-    }
+        lock.lock_owned().await
+    };
+
+    run_blocking(move || {
+        let mut cmd = Command::new("git");
+        cmd.args(["fetch", "--all", "--progress"]).current_dir(&path);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        hide_console_window(&mut cmd);
+        // 自動フェッチ (silent) は進捗イベントを出さない
+        // （ユーザー操作中のローディング表示に別リポジトリの進捗が混ざるのを防ぐ）
+        let progress_app = if is_silent { None } else { Some(&app) };
+        let (success, _stdout, stderr) =
+            run_git_command_with_progress(&mut cmd, progress_app, "fetch", op_id.as_deref())?;
+
+        if was_cancelled(&app, op_id.as_deref()) {
+            return Err("フェッチをキャンセルしました".to_string());
+        }
+        if success {
+            Ok("Fetch 完了".to_string())
+        } else {
+            Err(format!("Fetch 失敗: {}", stderr))
+        }
+    })
+    .await
 }
 
 /// git pull (CLI)
 #[tauri::command]
-pub fn git_pull(path: String) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["pull", "--progress"]).current_dir(&path);
-    hide_console_window(&mut cmd);
-    let (success, stdout, stderr) = run_git_command(&mut cmd)?;
+pub async fn git_pull(
+    path: String,
+    op_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let lock = app.state::<RepoLocks>().lock_for(&path);
+    let _guard = lock.lock_owned().await;
 
-    if success {
-        if stdout.contains("CONFLICT") || stderr.contains("CONFLICT") {
-            Ok("Pull 完了（コンフリクトあり）".to_string())
-        } else {
-            Ok("Pull 完了".to_string())
+    run_blocking(move || {
+        let mut cmd = Command::new("git");
+        cmd.args(["pull", "--progress"]).current_dir(&path);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        hide_console_window(&mut cmd);
+        let (success, stdout, stderr) =
+            run_git_command_with_progress(&mut cmd, Some(&app), "pull", op_id.as_deref())?;
+
+        if was_cancelled(&app, op_id.as_deref()) {
+            return Err("Pull をキャンセルしました".to_string());
         }
-    } else {
-        Err(format!("Pull 失敗: {}", stderr))
-    }
+        if success {
+            if stdout.contains("CONFLICT") || stderr.contains("CONFLICT") {
+                Ok("Pull 完了（コンフリクトあり）".to_string())
+            } else {
+                Ok("Pull 完了".to_string())
+            }
+        } else {
+            Err(format!("Pull 失敗: {}", stderr))
+        }
+    })
+    .await
 }
 
 /// git push (CLI)
 #[tauri::command]
-pub fn git_push(path: String) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["push", "--progress"]).current_dir(&path);
-    hide_console_window(&mut cmd);
-    let (success, _stdout, stderr) = run_git_command(&mut cmd)?;
+pub async fn git_push(
+    path: String,
+    op_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let lock = app.state::<RepoLocks>().lock_for(&path);
+    let _guard = lock.lock_owned().await;
 
-    if success {
-        Ok("Push 完了".to_string())
-    } else {
-        Err(format!("Push 失敗: {}", stderr))
-    }
+    run_blocking(move || {
+        let mut cmd = Command::new("git");
+        cmd.args(["push", "--progress"]).current_dir(&path);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        hide_console_window(&mut cmd);
+        let (success, _stdout, stderr) =
+            run_git_command_with_progress(&mut cmd, Some(&app), "push", op_id.as_deref())?;
+
+        if was_cancelled(&app, op_id.as_deref()) {
+            return Err("Push をキャンセルしました".to_string());
+        }
+        if success {
+            Ok("Push 完了".to_string())
+        } else {
+            Err(format!("Push 失敗: {}", stderr))
+        }
+    })
+    .await
 }
 
 /// ファイルをステージング
 #[tauri::command]
-pub fn git_stage_files(path: String, files: Vec<String>) -> Result<(), String> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
-    let mut index = repo.index().map_err(|e| e.to_string())?;
+pub async fn git_stage_files(
+    path: String,
+    files: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || {
+        let repo = git2::Repository::open(&p)
+            .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+        let mut index = repo.index().map_err(|e| e.to_string())?;
 
-    for file in &files {
-        let file_path = std::path::Path::new(file);
-        let full_path = std::path::Path::new(&path).join(file);
-        if full_path.exists() {
-            index.add_path(file_path).map_err(|e| e.to_string())?;
-        } else {
-            index.remove_path(file_path).map_err(|e| e.to_string())?;
+        for file in &files {
+            let file_path = std::path::Path::new(file);
+            let full_path = std::path::Path::new(&p).join(file);
+            if full_path.exists() {
+                index.add_path(file_path).map_err(|e| e.to_string())?;
+            } else {
+                index.remove_path(file_path).map_err(|e| e.to_string())?;
+            }
         }
-    }
 
-    index.write().map_err(|e| e.to_string())?;
-    Ok(())
+        index.write().map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
 }
 
 /// ファイルをアンステージ
 #[tauri::command]
-pub fn git_unstage_files(path: String, files: Vec<String>) -> Result<(), String> {
-    let repo = git2::Repository::open(&path)
+pub async fn git_unstage_files(
+    path: String,
+    files: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || unstage_files_blocking(&p, &files)).await
+}
+
+fn unstage_files_blocking(path: &str, files: &[String]) -> Result<(), String> {
+    let repo = git2::Repository::open(path)
         .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
     let head = repo.head().map_err(|e| e.to_string())?;
@@ -233,7 +356,7 @@ pub fn git_unstage_files(path: String, files: Vec<String>) -> Result<(), String>
 
     let mut index = repo.index().map_err(|e| e.to_string())?;
 
-    for file in &files {
+    for file in files {
         let file_path = std::path::Path::new(file);
         // HEAD のツリーにエントリがあれば復元、なければ削除
         match head_tree.get_path(file_path) {
@@ -266,48 +389,65 @@ pub fn git_unstage_files(path: String, files: Vec<String>) -> Result<(), String>
 
 /// 全ファイルをアンステージ
 #[tauri::command]
-pub fn git_unstage_all(path: String) -> Result<(), String> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+pub async fn git_unstage_all(path: String, app: tauri::AppHandle) -> Result<(), String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || {
+        let repo = git2::Repository::open(&p)
+            .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
-    let head = repo.head().map_err(|e| e.to_string())?;
-    let head_commit = head.peel_to_commit().map_err(|e| e.to_string())?;
-    let head_tree = head_commit.tree().map_err(|e| e.to_string())?;
+        let head = repo.head().map_err(|e| e.to_string())?;
+        let head_commit = head.peel_to_commit().map_err(|e| e.to_string())?;
+        let head_tree = head_commit.tree().map_err(|e| e.to_string())?;
 
-    repo.reset(head_tree.as_object(), git2::ResetType::Mixed, None)
-        .map_err(|e| format!("Unstage All 失敗: {}", e))?;
+        repo.reset(head_tree.as_object(), git2::ResetType::Mixed, None)
+            .map_err(|e| format!("Unstage All 失敗: {}", e))?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// 全ファイルをステージング
 #[tauri::command]
-pub fn git_stage_all(path: String) -> Result<(), String> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
-    let mut index = repo.index().map_err(|e| e.to_string())?;
+pub async fn git_stage_all(path: String, app: tauri::AppHandle) -> Result<(), String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || {
+        let repo = git2::Repository::open(&p)
+            .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+        let mut index = repo.index().map_err(|e| e.to_string())?;
 
-    index
-        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-        .map_err(|e| e.to_string())?;
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .map_err(|e| e.to_string())?;
 
-    // 削除されたファイルも反映
-    index
-        .update_all(["*"].iter(), None)
-        .map_err(|e| e.to_string())?;
+        // 削除されたファイルも反映
+        index
+            .update_all(["*"].iter(), None)
+            .map_err(|e| e.to_string())?;
 
-    index.write().map_err(|e| e.to_string())?;
-    Ok(())
+        index.write().map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
 }
 
 /// コミット作成
 #[tauri::command]
-pub fn git_commit(path: String, message: String) -> Result<String, String> {
+pub async fn git_commit(
+    path: String,
+    message: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || commit_blocking(&p, &message)).await
+}
+
+fn commit_blocking(path: &str, message: &str) -> Result<String, String> {
     if message.trim().is_empty() {
         return Err("コミットメッセージを入力してください".to_string());
     }
 
-    let repo = git2::Repository::open(&path)
+    let repo = git2::Repository::open(path)
         .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
     let mut index = repo.index().map_err(|e| e.to_string())?;
@@ -335,12 +475,21 @@ pub fn git_commit(path: String, message: String) -> Result<String, String> {
 
 /// コミット修正 (amend)
 #[tauri::command]
-pub fn git_commit_amend(path: String, message: String) -> Result<String, String> {
+pub async fn git_commit_amend(
+    path: String,
+    message: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || commit_amend_blocking(&p, &message)).await
+}
+
+fn commit_amend_blocking(path: &str, message: &str) -> Result<String, String> {
     if message.trim().is_empty() {
         return Err("コミットメッセージを入力してください".to_string());
     }
 
-    let repo = git2::Repository::open(&path)
+    let repo = git2::Repository::open(path)
         .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
     let head = repo.head().map_err(|_| "HEAD がありません（初回コミット未実施）".to_string())?;
@@ -370,50 +519,69 @@ pub fn git_last_commit_message(path: String) -> Result<String, String> {
 
 /// 変更を破棄 (checkout)
 #[tauri::command]
-pub fn git_discard_changes(path: String, files: Vec<String>) -> Result<(), String> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+pub async fn git_discard_changes(
+    path: String,
+    files: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || {
+        let repo = git2::Repository::open(&p)
+            .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
-    let mut checkout_builder = git2::build::CheckoutBuilder::new();
-    checkout_builder.force();
-    for file in &files {
-        checkout_builder.path(file);
-    }
+        let mut checkout_builder = git2::build::CheckoutBuilder::new();
+        checkout_builder.force();
+        for file in &files {
+            checkout_builder.path(file);
+        }
 
-    repo.checkout_head(Some(&mut checkout_builder))
-        .map_err(|e| format!("変更の破棄に失敗: {}", e))?;
+        repo.checkout_head(Some(&mut checkout_builder))
+            .map_err(|e| format!("変更の破棄に失敗: {}", e))?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Stash 作成
 #[tauri::command]
-pub fn git_stash(path: String, message: Option<String>) -> Result<String, String> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
-    let signature = repo.signature().map_err(|e| e.to_string())?;
-    let msg = message.as_deref().unwrap_or("WIP");
+pub async fn git_stash(
+    path: String,
+    message: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || {
+        let repo = git2::Repository::open(&p)
+            .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+        let signature = repo.signature().map_err(|e| e.to_string())?;
+        let msg = message.as_deref().unwrap_or("WIP");
 
-    // git2 の stash_save はミュータブル参照が必要
-    let mut repo = repo;
-    repo.stash_save(&signature, msg, None)
-        .map_err(|e| format!("Stash 失敗: {}", e))?;
+        // git2 の stash_save はミュータブル参照が必要
+        let mut repo = repo;
+        repo.stash_save(&signature, msg, None)
+            .map_err(|e| format!("Stash 失敗: {}", e))?;
 
-    Ok("Stash に保存しました".to_string())
+        Ok("Stash に保存しました".to_string())
+    })
+    .await
 }
 
 /// Stash Pop
 #[tauri::command]
-pub fn git_stash_pop(path: String) -> Result<String, String> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| format!("リポジトリを開けません: {}", e))?;
+pub async fn git_stash_pop(path: String, app: tauri::AppHandle) -> Result<String, String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || {
+        let mut repo = git2::Repository::open(&p)
+            .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
-    let mut repo = repo;
-    let mut opts = git2::StashApplyOptions::new();
-    repo.stash_pop(0, Some(&mut opts))
-        .map_err(|e| format!("Stash Pop 失敗: {}", e))?;
+        let mut opts = git2::StashApplyOptions::new();
+        repo.stash_pop(0, Some(&mut opts))
+            .map_err(|e| format!("Stash Pop 失敗: {}", e))?;
 
-    Ok("Stash を復元しました".to_string())
+        Ok("Stash を復元しました".to_string())
+    })
+    .await
 }
 
 /// Stash 一覧
@@ -448,8 +616,13 @@ pub fn git_stash_list(path: String) -> Result<Vec<StashEntry>, String> {
 ///   - 末尾の空き列は毎行削除してコンパクトに保つ
 ///   - 色は12色パレットからラウンドロビンで割り当て
 #[tauri::command]
-pub fn git_log_graph(path: String, count: Option<usize>) -> Result<Vec<GraphCommit>, String> {
-    let repo = git2::Repository::open(&path)
+pub async fn git_log_graph(path: String, count: Option<usize>) -> Result<Vec<GraphCommit>, String> {
+    // 大規模リポジトリでは revwalk + レイアウト計算が秒単位かかるためワーカースレッドで実行
+    run_blocking(move || git_log_graph_blocking(&path, count)).await
+}
+
+fn git_log_graph_blocking(path: &str, count: Option<usize>) -> Result<Vec<GraphCommit>, String> {
+    let repo = git2::Repository::open(path)
         .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
     let mut revwalk = repo.revwalk().map_err(|e| e.to_string())?;
@@ -657,11 +830,15 @@ pub fn git_log_graph(path: String, count: Option<usize>) -> Result<Vec<GraphComm
 
 /// コミット詳細取得（変更ファイル一覧付き）
 #[tauri::command]
-pub fn git_commit_detail(path: String, hash: String) -> Result<CommitDetail, String> {
-    let repo = git2::Repository::open(&path)
+pub async fn git_commit_detail(path: String, hash: String) -> Result<CommitDetail, String> {
+    run_blocking(move || commit_detail_blocking(&path, &hash)).await
+}
+
+fn commit_detail_blocking(path: &str, hash: &str) -> Result<CommitDetail, String> {
+    let repo = git2::Repository::open(path)
         .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
-    let oid = git2::Oid::from_str(&hash)
+    let oid = git2::Oid::from_str(hash)
         .map_err(|e| format!("無効なハッシュ: {}", e))?;
     let commit = repo.find_commit(oid)
         .map_err(|e| format!("コミットが見つかりません: {}", e))?;
@@ -716,8 +893,16 @@ pub fn git_commit_detail(path: String, hash: String) -> Result<CommitDetail, Str
 
 /// ファイルの diff 取得
 #[tauri::command]
-pub fn git_diff_file(path: String, file_path: String, staged: bool) -> Result<DiffResult, String> {
-    let repo = git2::Repository::open(&path)
+pub async fn git_diff_file(
+    path: String,
+    file_path: String,
+    staged: bool,
+) -> Result<DiffResult, String> {
+    run_blocking(move || diff_file_blocking(&path, file_path, staged)).await
+}
+
+fn diff_file_blocking(path: &str, file_path: String, staged: bool) -> Result<DiffResult, String> {
+    let repo = git2::Repository::open(path)
         .map_err(|e| format!("リポジトリを開けません: {}", e))?;
 
     let mut diff_opts = git2::DiffOptions::new();
@@ -875,43 +1060,103 @@ pub fn git_ahead_behind(path: String) -> Result<(usize, usize), String> {
 
 /// ファイル名でコミット検索（git log -- pattern）
 #[tauri::command]
-pub fn git_log_search_by_file(path: String, pattern: String, count: Option<usize>) -> Result<Vec<String>, String> {
-    let max_count = count.unwrap_or(500);
-    let glob = format!("*{}*", pattern);
-    let mut cmd = Command::new("git");
-    cmd.args([
-        "-C", &path,
-        "log", "--all",
-        &format!("--max-count={}", max_count),
-        "--format=%H",
-        "--",
-        &glob,
-    ]);
-    hide_console_window(&mut cmd);
+pub async fn git_log_search_by_file(
+    path: String,
+    pattern: String,
+    count: Option<usize>,
+) -> Result<Vec<String>, String> {
+    run_blocking(move || {
+        let max_count = count.unwrap_or(500);
+        let glob = format!("*{}*", pattern);
+        let mut cmd = Command::new("git");
+        cmd.args([
+            "-C", &path,
+            "log", "--all",
+            &format!("--max-count={}", max_count),
+            "--format=%H",
+            "--",
+            &glob,
+        ]);
+        hide_console_window(&mut cmd);
 
-    let output = cmd.output()
-        .map_err(|e| format!("git log 実行失敗: {}", e))?;
+        // 共通ランナー使用（大量マッチ時のパイプバッファ詰まり対策）
+        let (success, stdout, stderr) = run_git_command_with_progress(&mut cmd, None, "log", None)?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        // パターンに一致するファイルがない場合は空を返す
-        if stderr.is_empty() {
-            return Ok(Vec::new());
+        if !success {
+            // パターンに一致するファイルがない場合は空を返す
+            if stderr.is_empty() {
+                return Ok(Vec::new());
+            }
+            return Err(format!("git log エラー: {}", stderr));
         }
-        return Err(format!("git log エラー: {}", stderr));
-    }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let hashes: Vec<String> = stdout
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| l.to_string())
-        .collect();
+        let hashes: Vec<String> = stdout
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect();
 
-    Ok(hashes)
+        Ok(hashes)
+    })
+    .await
 }
 
 // ===== ヘルパー関数 =====
+
+/// 進捗イベント ("git-progress") のペイロード
+#[derive(Clone, serde::Serialize)]
+pub struct GitProgress {
+    pub op: String,
+    pub line: String,
+}
+
+/// ブロッキング処理をワーカースレッドで実行する。
+/// Tauri 2 では同期コマンドはメインスレッドで実行されウィンドウごとフリーズするため、
+/// 重い git 操作は必ずこれを介して UI スレッドから逃がす。
+pub(crate) async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("内部エラー: {}", e))?
+}
+
+/// リポジトリ単位のロックを取得してからブロッキング処理を実行する（書き込み系操作用）。
+/// 自動フェッチとユーザー操作が同一リポジトリで並行して index.lock 競合するのを防ぐ。
+pub(crate) async fn run_locked_blocking<T, F>(
+    app: &tauri::AppHandle,
+    path: &str,
+    f: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    let lock = app.state::<RepoLocks>().lock_for(path);
+    let _guard = lock.lock_owned().await;
+    run_blocking(f).await
+}
+
+/// op_id がキャンセル済みかを確認する（フラグは消費される）
+pub(crate) fn was_cancelled(app: &tauri::AppHandle, op_id: Option<&str>) -> bool {
+    match op_id {
+        Some(id) => app.state::<RunningOps>().take_cancelled(id),
+        None => false,
+    }
+}
+
+/// 末尾 max_len バイトだけ残す（UTF-8 文字境界を壊さない位置で切る）
+fn trim_to_tail(output: &mut String, max_len: usize) {
+    if output.len() > max_len {
+        let mut trim_at = output.len() - max_len;
+        while !output.is_char_boundary(trim_at) {
+            trim_at += 1;
+        }
+        *output = output[trim_at..].to_string();
+    }
+}
 
 /// CLI git コマンドを安全に実行する共通ヘルパー。
 /// `Command::output()` は stdout/stderr をすべてメモリに蓄積するため、
@@ -920,16 +1165,37 @@ pub fn git_log_search_by_file(path: String, pattern: String, count: Option<usize
 /// 長時間ブロックされてフロントエンドがタイムアウトする。
 /// この関数は spawn + スレッドで stdout/stderr を並行読み取りし、
 /// バッファ溢れを防ぎつつ最後の出力のみを保持する（最大 64KB）。
-fn run_git_command(cmd: &mut Command) -> Result<(bool, String, String), String> {
+///
+/// さらに:
+///   - `app` が Some の場合、stderr の進捗行 (`\r` / `\n` 区切り) を
+///     "git-progress" イベントとしてフロントエンドへ通知する
+///   - `op_id` が Some の場合、実行中プロセスの PID を RunningOps に登録し
+///     `git_cancel` コマンドから kill できるようにする
+///   - stdin は常に閉じる（認証プロンプト等による無限ハング防止）
+pub(crate) fn run_git_command_with_progress(
+    cmd: &mut Command,
+    app: Option<&tauri::AppHandle>,
+    op: &str,
+    op_id: Option<&str>,
+) -> Result<(bool, String, String), String> {
+    cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn()
         .map_err(|e| format!("git コマンド起動失敗: {}", e))?;
 
+    // キャンセル用に PID を登録
+    if let (Some(app), Some(id)) = (app, op_id) {
+        app.state::<RunningOps>().register(id, child.id());
+    }
+
     // stderr をバックグラウンドスレッドで読む（進捗出力がパイプを詰まらせるのを防ぐ）
     let stderr_handle = child.stderr.take();
+    let app_clone = app.cloned();
+    let op_name = op.to_string();
     let stderr_thread = std::thread::spawn(move || {
         let mut output = String::new();
+        let mut segment = String::new(); // \r / \n で区切られた進捗1行分
         if let Some(mut stderr) = stderr_handle {
             let mut buf = [0u8; 8192];
             loop {
@@ -937,12 +1203,26 @@ fn run_git_command(cmd: &mut Command) -> Result<(bool, String, String), String> 
                     Ok(0) => break,
                     Ok(n) => {
                         let chunk = String::from_utf8_lossy(&buf[..n]);
+                        // 進捗行 ("Receiving objects:  45% ..." など) を行ごとに emit
+                        if let Some(app) = &app_clone {
+                            for ch in chunk.chars() {
+                                if ch == '\r' || ch == '\n' {
+                                    let line = segment.trim();
+                                    if !line.is_empty() {
+                                        let _ = app.emit("git-progress", GitProgress {
+                                            op: op_name.clone(),
+                                            line: line.to_string(),
+                                        });
+                                    }
+                                    segment.clear();
+                                } else {
+                                    segment.push(ch);
+                                }
+                            }
+                        }
                         // 最後の 64KB のみ保持（巨大な進捗出力でメモリを食わない）
                         output.push_str(&chunk);
-                        if output.len() > 65536 {
-                            let trim_at = output.len() - 65536;
-                            output = output[trim_at..].to_string();
-                        }
+                        trim_to_tail(&mut output, 65536);
                     }
                     Err(_) => break,
                 }
@@ -963,10 +1243,7 @@ fn run_git_command(cmd: &mut Command) -> Result<(bool, String, String), String> 
                     Ok(n) => {
                         let chunk = String::from_utf8_lossy(&buf[..n]);
                         output.push_str(&chunk);
-                        if output.len() > 65536 {
-                            let trim_at = output.len() - 65536;
-                            output = output[trim_at..].to_string();
-                        }
+                        trim_to_tail(&mut output, 65536);
                     }
                     Err(_) => break,
                 }
@@ -976,12 +1253,68 @@ fn run_git_command(cmd: &mut Command) -> Result<(bool, String, String), String> 
     });
 
     let status = child.wait()
-        .map_err(|e| format!("git コマンド待機失敗: {}", e))?;
+        .map_err(|e| format!("git コマンド待機失敗: {}", e));
+
+    // PID の登録解除（wait の成否に関わらず行う）
+    if let (Some(app), Some(id)) = (app, op_id) {
+        app.state::<RunningOps>().unregister(id);
+    }
+    let status = status?;
 
     let stdout_str = stdout_thread.join().unwrap_or_default();
     let stderr_str = stderr_thread.join().unwrap_or_default();
 
     Ok((status.success(), stdout_str, stderr_str))
+}
+
+/// 実行中の git 操作をキャンセルする（プロセスツリーごと強制終了）
+#[tauri::command]
+pub fn git_cancel(op_id: String, ops: tauri::State<'_, RunningOps>) -> Result<(), String> {
+    let pid = ops.pid_of(&op_id)
+        .ok_or_else(|| "該当する実行中の操作がありません".to_string())?;
+
+    // kill 後にコマンド側が「キャンセルされた」と判別できるよう先にマークする
+    ops.mark_cancelled(&op_id);
+
+    #[cfg(target_os = "windows")]
+    {
+        // git は子プロセス (git-remote-https 等) を生むため /T でツリーごと終了する
+        let mut kill = Command::new("taskkill");
+        kill.args(["/T", "/F", "/PID", &pid.to_string()]);
+        hide_console_window(&mut kill);
+        kill.output().map_err(|e| format!("プロセス停止失敗: {}", e))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .output();
+    }
+
+    Ok(())
+}
+
+/// Windows では .git 配下の読み取り専用ファイルで remove_dir_all が失敗するため、
+/// 読み取り専用属性を外しながらベストエフォートで削除する（キャンセルされた clone の後始末用）
+fn remove_dir_all_force(path: &std::path::Path) {
+    fn clear_readonly(p: &std::path::Path) {
+        if let Ok(meta) = p.symlink_metadata() {
+            let mut perm = meta.permissions();
+            if perm.readonly() {
+                perm.set_readonly(false);
+                let _ = std::fs::set_permissions(p, perm);
+            }
+            if meta.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(p) {
+                    for e in entries.flatten() {
+                        clear_readonly(&e.path());
+                    }
+                }
+            }
+        }
+    }
+    clear_readonly(path);
+    let _ = std::fs::remove_dir_all(path);
 }
 
 /// 未プル（リモートにのみ存在する）コミットのハッシュセットを構築
@@ -1101,7 +1434,12 @@ fn validate_hash(hash: &str) -> Result<(), String> {
 /// git reset (CLI)
 /// mode: "hard" = 完全に戻す（変更破棄）, "soft" = HEAD移動のみ（変更をステージに維持）
 #[tauri::command]
-pub fn git_reset(path: String, hash: String, mode: String) -> Result<String, String> {
+pub async fn git_reset(
+    path: String,
+    hash: String,
+    mode: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
     validate_hash(&hash)?;
 
     // mode バリデーション
@@ -1111,37 +1449,43 @@ pub fn git_reset(path: String, hash: String, mode: String) -> Result<String, Str
         _ => return Err("無効なリセットモードです（hard または soft のみ）".to_string()),
     };
 
-    let mut cmd = Command::new("git");
-    cmd.args(["reset", reset_mode, &hash]).current_dir(&path);
-    hide_console_window(&mut cmd);
-    let output = cmd.output()
-        .map_err(|e| format!("git reset 実行失敗: {}", e))?;
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || {
+        let mut cmd = Command::new("git");
+        // core.longpaths: reset --hard はワークツリーを書き換えるため長いパス対策を入れる
+        cmd.args(["-c", "core.longpaths=true", "reset", reset_mode, &hash])
+            .current_dir(&p);
+        hide_console_window(&mut cmd);
+        let (success, _stdout, stderr) = run_git_command_with_progress(&mut cmd, None, "reset", None)?;
 
-    if output.status.success() {
-        if mode == "hard" {
-            Ok("Reset 完了（変更を破棄しました）".to_string())
+        if success {
+            if mode == "hard" {
+                Ok("Reset 完了（変更を破棄しました）".to_string())
+            } else {
+                Ok("Reset 完了（変更はステージに維持）".to_string())
+            }
         } else {
-            Ok("Reset 完了（変更はステージに維持）".to_string())
+            Err(format!("Reset 失敗: {}", stderr))
         }
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Reset 失敗: {}", stderr))
-    }
+    })
+    .await
 }
 
 /// git gc --auto（不要オブジェクトの最適化）
 #[tauri::command]
-pub fn git_gc(path: String) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["gc", "--auto"]).current_dir(&path);
-    hide_console_window(&mut cmd);
-    let output = cmd.output()
-        .map_err(|e| format!("git gc 実行失敗: {}", e))?;
+pub async fn git_gc(path: String, app: tauri::AppHandle) -> Result<String, String> {
+    let p = path.clone();
+    run_locked_blocking(&app, &path, move || {
+        let mut cmd = Command::new("git");
+        cmd.args(["gc", "--auto"]).current_dir(&p);
+        hide_console_window(&mut cmd);
+        let (success, _stdout, stderr) = run_git_command_with_progress(&mut cmd, None, "gc", None)?;
 
-    if output.status.success() {
-        Ok("最適化完了".to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("最適化失敗: {}", stderr))
-    }
+        if success {
+            Ok("最適化完了".to_string())
+        } else {
+            Err(format!("最適化失敗: {}", stderr))
+        }
+    })
+    .await
 }

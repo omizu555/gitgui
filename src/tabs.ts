@@ -41,8 +41,7 @@ export class TabManager {
     this.addBtn = document.getElementById("btn-add-tab")!;
     this.addBtn.addEventListener("click", () => this.switchToNewTab());
 
-    // タブバー全体の右クリックメニュー抑制
-    this.tabBar.addEventListener("contextmenu", (e) => e.preventDefault());
+    // 右クリックメニュー抑制は main.ts の setupGlobalContextMenuSuppression で全体一括処理
   }
 
   // ========== データ操作 ==========
@@ -270,9 +269,6 @@ export class TabManager {
         this.switchTab(tab.id);
       }
     });
-
-    // 右クリックメニュー抑制
-    el.addEventListener("contextmenu", (e) => e.preventDefault());
 
     // === マウスベース D&D: タブ並び替え ===
     el.addEventListener("mousedown", (e) => {

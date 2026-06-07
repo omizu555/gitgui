@@ -194,6 +194,12 @@
         <button id="btn-clone-browse" style="padding:6px 12px;background:#363636;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer">参照...</button>
       </div>
     </div>
+    <div class="modal-field">
+      <label class="clone-shallow-label" title="最新のコミットのみ取得します。巨大なリポジトリのクローンが大幅に速くなりますが、過去の履歴は参照できません">
+        <input type="checkbox" id="clone-shallow">
+        履歴を浅くクローン（--depth 1 / 巨大リポジトリ向け）
+      </label>
+    </div>
     <div class="modal-actions">
       <button class="btn-cancel" id="btn-clone-cancel">キャンセル</button>
       <button class="btn-ok" id="btn-clone-ok">クローン開始</button>
@@ -335,6 +341,7 @@
 <div class="loading-overlay" id="loading-overlay">
   <div class="loading-spinner"></div>
   <div class="loading-text">処理中...</div>
+  <button id="loading-cancel" class="loading-cancel" hidden>キャンセル</button>
 </div>
 
 <!-- ===== D&D ドロップオーバーレイ ===== -->

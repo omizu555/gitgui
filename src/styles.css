@@ -1193,6 +1193,41 @@ body {
   color: #ccc;
   font-size: 14px;
   letter-spacing: 0.5px;
+  max-width: 70vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.loading-cancel {
+  background: #363636;
+  border: 1px solid #555;
+  color: #ccc;
+  border-radius: 4px;
+  padding: 6px 18px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.loading-cancel:hover {
+  background: #443030;
+  border-color: #a05050;
+  color: #fff;
+}
+.loading-cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== クローンモーダル: shallow チェック ===== */
+.clone-shallow-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: #ccc;
+  font-size: 13px;
+}
+.clone-shallow-label input[type="checkbox"] {
+  accent-color: #4fc1ff;
 }
 
 /* ===== ツールバーボタン disabled ===== */

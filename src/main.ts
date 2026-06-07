@@ -1,6 +1,7 @@
 // ===== main.ts — アプリ初期化 & イベントハンドラー =====
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, ask } from "@tauri-apps/plugin-dialog";
 import { TabManager } from "./tabs";
@@ -28,6 +29,8 @@ let isOperationRunning = false;
 let loadedLogCount = 0;
 const LOG_PAGE_SIZE = 200;
 let autoFetchTimerId: ReturnType<typeof setInterval> | null = null;
+// 実行中のキャンセル可能な操作の ID（clone/fetch/pull/push/checkout）
+let currentOpId: string | null = null;
 
 // グラフ描画定数
 const GRAPH_COL_SPACING = 16;
@@ -69,7 +72,25 @@ window.addEventListener("error", (e) => {
   showToast("エラー: " + e.message, "error");
 });
 
+// =========================================
+//  デフォルト右クリックメニューの全体抑制
+// =========================================
+
+/**
+ * WebView デフォルトのコンテキストメニューをアプリ全体で抑制する。
+ * - 入力欄 (input / textarea) はコピー・貼り付け用に標準メニューを許可
+ * - 独自メニュー (.file-item / .log-row) は各要素のハンドラがこれとは別に表示する
+ */
+function setupGlobalContextMenuSuppression(): void {
+  document.addEventListener("contextmenu", (e) => {
+    const target = e.target as Element | null;
+    if (target?.closest("input, textarea, [contenteditable]")) return;
+    e.preventDefault();
+  });
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  setupGlobalContextMenuSuppression();
   tabManager = new TabManager();
   tabManager.initDragListeners();
   await tabManager.loadProjects();
@@ -90,6 +111,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupLogScrollLoad();
   setupWindowFocusRefresh();
   setupSettingsDialog();
+  setupGitProgressListener();
+  setupLoadingCancel();
   await initAutoFetch();
 
   // 起動時に全タブのバッジ（behind + 変更ファイル数）を初期化
@@ -119,8 +142,7 @@ window.onTabSwitch = async (tab: { path: string }) => {
 // =========================================
 
 function setupToolbarEvents(): void {
-  // ツールバーの右クリックメニュー抑制
-  $("toolbar").addEventListener("contextmenu", (e) => e.preventDefault());
+  // 右クリックメニュー抑制は setupGlobalContextMenuSuppression で全体一括処理
 
   /** ツールバーボタンの共通ハンドラ: loading 表示→invoke→toast→refreshAll */
   function toolbarOp(
@@ -136,9 +158,10 @@ function setupToolbarEvents(): void {
     $(btnId).addEventListener("click", async () => {
       const path = tabManager.getActivePath();
       if (!path) return;
-      setLoading(true, `${label} 中...`);
+      const opId = crypto.randomUUID();
+      setLoading(true, `${label} 中...`, opId);
       try {
-        const result = await invoke<string>(command, { path, ...opts?.args });
+        const result = await invoke<string>(command, { path, opId, ...opts?.args });
         if (opts?.onResult) {
           opts.onResult(result);
         } else {
@@ -147,7 +170,11 @@ function setupToolbarEvents(): void {
         await refreshAll(path);
         if (opts?.afterRefresh) await opts.afterRefresh();
       } catch (e) {
-        showToast(`${label} 失敗: ` + e, "error");
+        if (String(e).includes("キャンセルしました")) {
+          showToast(String(e), "info");
+        } else {
+          showToast(`${label} 失敗: ` + e, "error");
+        }
       } finally {
         setLoading(false);
       }
@@ -232,6 +259,7 @@ function openCloneModal(): void {
   $("clone-modal").classList.add("visible");
   $<HTMLInputElement>("clone-url").value = "";
   $<HTMLInputElement>("clone-dest").value = "";
+  $<HTMLInputElement>("clone-shallow").checked = false;
   $<HTMLInputElement>("clone-url").focus();
 }
 
@@ -266,14 +294,21 @@ async function executeClone(): Promise<void> {
     return;
   }
 
+  const shallow = $<HTMLInputElement>("clone-shallow").checked;
+
   closeCloneModal();
-  setLoading(true, "クローン中...");
+  const opId = crypto.randomUUID();
+  setLoading(true, "クローン中...", opId);
   try {
-    const clonedPath = await invoke<string>("git_clone", { url, dest });
+    const clonedPath = await invoke<string>("git_clone", { url, dest, shallow, opId });
     showToast("クローン完了", "success");
     await tabManager.addProject(clonedPath);
   } catch (e) {
-    showToast("クローン失敗: " + e, "error");
+    if (String(e).includes("キャンセルしました")) {
+      showToast(String(e), "info");
+    } else {
+      showToast("クローン失敗: " + e, "error");
+    }
   } finally {
     setLoading(false);
   }
@@ -946,13 +981,18 @@ async function checkoutBranch(name: string): Promise<void> {
     /* ignore */
   }
 
-  setLoading(true, "ブランチ切り替え中...");
+  const opId = crypto.randomUUID();
+  setLoading(true, "ブランチ切り替え中...", opId);
   try {
-    await invoke("git_checkout_branch", { path, branchName: name });
+    await invoke("git_checkout_branch", { path, branchName: name, opId });
     showToast(`ブランチを ${name} に切り替えました`, "success");
     await refreshAll(path);
   } catch (e) {
-    showToast("ブランチ切り替え失敗: " + e, "error");
+    if (String(e).includes("キャンセルしました")) {
+      showToast(String(e), "info");
+    } else {
+      showToast("ブランチ切り替え失敗: " + e, "error");
+    }
   } finally {
     setLoading(false);
   }
@@ -1681,10 +1721,12 @@ function showToast(message: string, type: ToastType = "info"): void {
   }, 3000);
 }
 
-function setLoading(show: boolean, message = ""): void {
+function setLoading(show: boolean, message = "", cancellableOpId: string | null = null): void {
   isOperationRunning = show;
+  currentOpId = show ? cancellableOpId : null;
   const statusBranch = $("status-branch") as HTMLElement;
   const overlay = document.getElementById("loading-overlay");
+  const cancelBtn = document.getElementById("loading-cancel") as HTMLButtonElement | null;
 
   if (show && message) {
     statusBranch.dataset.prevText = statusBranch.textContent || "";
@@ -1694,6 +1736,12 @@ function setLoading(show: boolean, message = ""): void {
       overlay.querySelector(".loading-text")!.textContent = message;
       overlay.classList.add("visible");
     }
+    // キャンセル可能な操作のときだけキャンセルボタンを表示
+    if (cancelBtn) {
+      cancelBtn.hidden = cancellableOpId === null;
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = "キャンセル";
+    }
     // ツールバーボタンを無効化
     setToolbarButtonsDisabled(true);
   } else if (!show) {
@@ -1702,8 +1750,37 @@ function setLoading(show: boolean, message = ""): void {
       delete statusBranch.dataset.prevText;
     }
     if (overlay) overlay.classList.remove("visible");
+    if (cancelBtn) cancelBtn.hidden = true;
     setToolbarButtonsDisabled(false);
   }
+}
+
+/** バックエンドからの git 進捗イベント ("Receiving objects: 45% ..." 等) をローディング表示に反映 */
+function setupGitProgressListener(): void {
+  void listen<{ op: string; line: string }>("git-progress", (e) => {
+    const overlay = document.getElementById("loading-overlay");
+    if (!overlay || !overlay.classList.contains("visible")) return;
+    const text = overlay.querySelector(".loading-text");
+    if (text) text.textContent = e.payload.line;
+  });
+}
+
+/** ローディングオーバーレイのキャンセルボタン */
+function setupLoadingCancel(): void {
+  const btn = $<HTMLButtonElement>("loading-cancel");
+  btn.addEventListener("click", async () => {
+    if (!currentOpId) return;
+    btn.disabled = true;
+    btn.textContent = "キャンセル中...";
+    try {
+      await invoke("git_cancel", { opId: currentOpId });
+      // 実行中の invoke がエラーで返り、各呼び出し元の finally で setLoading(false) される
+    } catch (e) {
+      showToast("キャンセルに失敗: " + e, "error");
+      btn.disabled = false;
+      btn.textContent = "キャンセル";
+    }
+  });
 }
 
 /** ツールバーボタンの有効/無効を切り替え */
@@ -1824,9 +1901,11 @@ async function autoFetchAll(): Promise<void> {
 
   for (const tab of tabManager.tabs) {
     try {
-      await invoke("git_fetch", { path: tab.path });
+      // silent: ユーザー操作が同じリポジトリで実行中なら、ロック待ちせず
+      // バックエンドが "BUSY" を返してスキップする（index.lock 競合の防止）
+      await invoke("git_fetch", { path: tab.path, silent: true });
     } catch {
-      // サイレント失敗
+      // サイレント失敗（BUSY 含む）
     }
   }
 
